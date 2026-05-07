@@ -1825,16 +1825,24 @@ function MasterTaskTab({ onRefreshAll, categories, initialParentFilter, onInitia
         direction: movedUp ? "up" : "down",
       });
       if (result.aiReflection) {
+        // Success: show AI reflection (acts as success state). Modal stays open
+        // until user clicks "Got it ✓".
         setAiReflection(result.aiReflection);
       } else {
+        // Success but no reflection (AI call failed server-side or returned
+        // empty). Reorder + feedback row are persisted — show a brief success
+        // toast, then close.
+        setPlacementToast("✓ Saved · brain trained");
         closePendingDrop();
       }
-    } catch {
-      // Revert on error
-      setTasks(pendingDrop.prevTasks);
-      closePendingDrop();
+    } catch (err) {
+      // Persistence failed — keep modal OPEN, leave optimistic order in place
+      // so Tony can retry or hit Cancel (revert). Surface a toast.
+      console.error("[BusinessView] submitTraining failed:", err);
+      setPlacementToast("⚠ Save failed — try again or Cancel to revert");
+    } finally {
+      setSubmittingTraining(false);
     }
-    setSubmittingTraining(false);
   }
 
   function cancelTraining() {
@@ -2104,32 +2112,45 @@ function MasterTaskTab({ onRefreshAll, categories, initialParentFilter, onInitia
             {loading ? "Loading…" : `${displayed.length} tasks`}
           </span>
           <span style={{ fontSize: 10, color: C.mut, fontFamily: F }}>⠿ drag rows to reorder</span>
-          <button
-            onClick={() => runAiOrganize("top50")}
-            disabled={organizing || loading}
-            title="Re-rank the top 50 active tasks by current priority — faster, stays well within Vercel's 300s function limit."
-            style={{
-              padding: "7px 14px", borderRadius: 8, border: `1px solid ${C.blu}`,
-              background: organizing ? C.bluBg : C.bluBg, color: C.blu,
-              fontSize: 12, fontWeight: 700, cursor: organizing ? "wait" : "pointer", fontFamily: F,
-              display: "flex", alignItems: "center", gap: 5,
-            }}
-          >
-            {organizing ? "🧠 Thinking…" : "🧠 AI Organize · Top 50"}
-          </button>
+          {tasks.length >= 50 && (
+            <button
+              onClick={() => runAiOrganize("top50")}
+              disabled={organizing || loading}
+              title="Re-rank the top 50 active tasks by current priority — faster, stays well within Vercel's 300s function limit."
+              style={{
+                padding: "7px 14px", borderRadius: 8, border: `1px solid ${C.blu}`,
+                background: organizing ? C.bluBg : C.bluBg, color: C.blu,
+                fontSize: 12, fontWeight: 700, cursor: organizing ? "wait" : "pointer", fontFamily: F,
+                display: "flex", alignItems: "center", gap: 5,
+              }}
+            >
+              {organizing ? "🧠 Thinking…" : "🧠 AI Organize · Top 50"}
+            </button>
+          )}
           <button
             onClick={() => runAiOrganize("all")}
-            disabled={organizing || loading || tasks.length <= 50}
-            title={tasks.length <= 50 ? "Only ${tasks.length} active tasks — Top 50 covers everything" : `Re-rank ALL ${tasks.length} active tasks (slower — may take 2-4 minutes for 200+ tasks)`}
+            disabled={organizing || loading || tasks.length === 0}
+            title={tasks.length === 0
+              ? "No active tasks to organize"
+              : tasks.length < 50
+                ? `Re-rank all ${tasks.length} active tasks`
+                : `Re-rank ALL ${tasks.length} active tasks (slower — may take 2-4 minutes for 200+ tasks)`}
             style={{
-              padding: "7px 12px", borderRadius: 8, border: `1px solid ${C.mut}`,
-              background: "transparent", color: C.mut,
-              fontSize: 11, fontWeight: 600, cursor: (organizing || loading || tasks.length <= 50) ? "not-allowed" : "pointer", fontFamily: F,
+              padding: "7px 14px", borderRadius: 8,
+              border: tasks.length < 50 ? `1px solid ${C.blu}` : `1px solid ${C.mut}`,
+              background: tasks.length < 50 ? C.bluBg : "transparent",
+              color: tasks.length < 50 ? C.blu : C.mut,
+              fontSize: tasks.length < 50 ? 12 : 11,
+              fontWeight: tasks.length < 50 ? 700 : 600,
+              cursor: (organizing || loading || tasks.length === 0) ? "not-allowed" : "pointer",
+              fontFamily: F,
               display: "flex", alignItems: "center", gap: 4,
-              opacity: (organizing || loading || tasks.length <= 50) ? 0.45 : 1,
+              opacity: (organizing || loading || tasks.length === 0) ? 0.45 : 1,
             }}
           >
-            🧠 Organize all {tasks.length}
+            {tasks.length < 50
+              ? (organizing ? "🧠 Thinking…" : "🧠 Organize Tasks")
+              : `🧠 Organize all ${tasks.length}`}
           </button>
           <button
             onClick={exportTasksToCsv}
@@ -3412,15 +3433,6 @@ export function BusinessView({ onBack, defaultTab, onTabChange }: { onBack: () =
     finally { setSyncing(false); }
   }
 
-  async function handleRefreshFromDb() {
-    setSyncing(true);
-    try {
-      await post("/sheets/sync-master", {});
-      setToast("✓ Pushed DB → Sheets");
-    } catch { setErr("Refresh from DB failed"); }
-    finally { setSyncing(false); }
-  }
-
   const totalTasks = categories.reduce((s, c) => s + c.totalTasks, 0);
   const doneTasks = categories.reduce((s, c) => s + c.completedTasks, 0);
 
@@ -3453,16 +3465,6 @@ export function BusinessView({ onBack, defaultTab, onTabChange }: { onBack: () =
             <div style={{ display: "flex", gap: 8, position: "relative" }}>
               {tab === "goals" && (
                 <button onClick={handlePushToSheet} disabled={syncing} style={{ padding: "6px 12px", borderRadius: 7, border: `1px solid ${C.grn}`, background: C.grnBg, color: C.grn, fontSize: 12, cursor: "pointer", fontFamily: F }}>↑ Push</button>
-              )}
-              {(tab === "tasks" || tab === "goals") && (
-                <button
-                  onClick={handleRefreshFromDb}
-                  disabled={syncing}
-                  title="Push to Google Sheets"
-                  style={{ padding: "6px 12px", borderRadius: 7, border: `1px solid ${C.brd}`, background: C.card, color: C.sub, fontSize: 12, cursor: syncing ? "wait" : "pointer", fontFamily: F, display: "flex", alignItems: "center", gap: 4 }}
-                >
-                  {syncing ? "⟳ Syncing..." : "↑ Push to Sheets"}
-                </button>
               )}
             </div>
           </div>
