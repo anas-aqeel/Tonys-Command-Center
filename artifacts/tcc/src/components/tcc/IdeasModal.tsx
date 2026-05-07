@@ -3,6 +3,7 @@ import { post, get } from "@/lib/api";
 import { C, F, FS, inp, btn1, btn2, lbl } from "./constants";
 import { VoiceInput } from "./VoiceInput";
 import { showToast } from "./Toast";
+import { showTrainNowToast } from "@/lib/trainNowToast";
 import type { Idea } from "./types";
 
 const CATS = ["Tech", "Sales", "Marketing", "Strategic Partners", "Operations", "Product", "Personal"];
@@ -396,14 +397,17 @@ export function IdeasModal({ open, onClose, onSave, onCreateTask, count }: Props
       // button below) that already DM him. Tech ALSO gets a #tech-ideas
       // channel post server-side from POST /ideas — the DM is additive.
       if (!pushback) {
-        post("/ideas/notify-park", {
+        const parkRes = await post<{ ok: boolean; feedback_id?: string }>("/ideas/notify-park", {
           text, category: finalCat, urgency: finalUrg, ideaId: idea.id,
-        }).catch(err => console.warn("[Ideas] notify-park failed:", err));
-        showToast({
+        }).catch(err => { console.warn("[Ideas] notify-park failed:", err); return null; });
+        showTrainNowToast({
+          agent: "ideas",
+          feedbackId: parkRes?.feedback_id ?? null,
+          sourceId: idea.id,
           title: finalCat === "Tech" ? "Tech idea parked" : "Idea parked",
           description: finalCat === "Tech"
-            ? "Posted to #engineering · Ethan DM'd"
-            : "Ethan notified on Slack",
+            ? "Posted to #engineering · Train the ideas agent?"
+            : "Ethan notified · Train the ideas agent on this park?",
         });
       } else {
         showToast({ title: "Idea saved" });
@@ -537,7 +541,7 @@ export function IdeasModal({ open, onClose, onSave, onCreateTask, count }: Props
                       // Always notify Ethan when this button is clicked (matches the label).
                       // Pass ideaId/category/urgency so the backend can record an
                       // 'escalate' feedback row (B5-4) with full snapshot context.
-                      type EscalateRes = { ok: boolean; meetingStart?: string; meetingEnd?: string; calendarOk?: boolean; slackOk?: boolean };
+                      type EscalateRes = { ok: boolean; meetingStart?: string; meetingEnd?: string; calendarOk?: boolean; slackOk?: boolean; feedback_id?: string };
                       const r: EscalateRes = await post<EscalateRes>("/ideas/escalate-to-ethan", {
                         text,
                         rank: pushback.priorityRank,
@@ -547,7 +551,7 @@ export function IdeasModal({ open, onClose, onSave, onCreateTask, count }: Props
                         category: finalCat,
                         urgency: finalUrg,
                         reasoning: pushback.message || null,
-                      }).catch(() => ({ ok: false }));
+                      }).catch(() => ({ ok: false } as EscalateRes));
 
                       // Confirmation string for the saving step UX.
                       const friendly = formatMeetingAt(startLocal);
@@ -557,11 +561,14 @@ export function IdeasModal({ open, onClose, onSave, onCreateTask, count }: Props
                           : `Idea parked. Ethan notified on Slack (calendar booking failed).`
                       );
 
-                      showToast({
+                      showTrainNowToast({
+                        agent: "ideas",
+                        feedbackId: r.feedback_id ?? null,
+                        sourceId: idea.id,
                         title: "Idea escalated to Ethan",
                         description: r.ok && r.calendarOk !== false
-                          ? `Meeting booked for ${friendly}`
-                          : "Slack sent (calendar booking failed)",
+                          ? `Meeting booked for ${friendly} · Train the ideas agent?`
+                          : "Slack sent · Train the ideas agent on this escalation?",
                       });
 
                       // V3 optional assignee notification — fires when Tony
@@ -626,12 +633,18 @@ export function IdeasModal({ open, onClose, onSave, onCreateTask, count }: Props
                       try {
                         const idea = await post<Idea>("/ideas", { text, category: finalCat, urgency: "Someday" });
                         // Notify Ethan via Slack DM that Tony parked despite pushback.
-                        post("/ideas/notify-park", {
+                        const parkRes = await post<{ ok: boolean; feedback_id?: string }>("/ideas/notify-park", {
                           text, category: finalCat, urgency: "Someday", ideaId: idea.id,
-                        }).catch(err => console.warn("[Ideas] notify-park failed:", err));
+                        }).catch(err => { console.warn("[Ideas] notify-park failed:", err); return null; });
                         // V4 optional assignee notification.
                         dispatchPushbackAssigneeNotify(finalCat, "Someday");
-                        showToast({ title: "Idea parked", description: "Ethan notified on Slack" });
+                        showTrainNowToast({
+                          agent: "ideas",
+                          feedbackId: parkRes?.feedback_id ?? null,
+                          sourceId: idea.id,
+                          title: "Idea parked despite pushback",
+                          description: "Ethan notified · Train the ideas agent on this park?",
+                        });
                         onSave(idea);
                         handleClose();
                       } catch {
@@ -672,8 +685,16 @@ export function IdeasModal({ open, onClose, onSave, onCreateTask, count }: Props
                     setStep("saving");
                     try {
                       const idea = await post<Idea>("/ideas", { text, category: finalCat, urgency: finalUrg });
-                      await post("/ideas/notify-override", { text, justification: override.justification, ideaId: idea.id }).catch(() => {});
-                      showToast({ title: "Override confirmed", description: "#engineering and Ethan notified" });
+                      const ovRes = await post<{ ok: boolean; feedback_id?: string }>("/ideas/notify-override", {
+                        text, justification: override.justification, ideaId: idea.id,
+                      }).catch(() => null);
+                      showTrainNowToast({
+                        agent: "ideas",
+                        feedbackId: ovRes?.feedback_id ?? null,
+                        sourceId: idea.id,
+                        title: "Override confirmed",
+                        description: "#engineering + Ethan notified · Train the ideas agent on this override?",
+                      });
                       onSave(idea);
                       if (onCreateTask) await onCreateTask(text, finalCat, finalUrg, finalTt ?? undefined);
                       handleClose();

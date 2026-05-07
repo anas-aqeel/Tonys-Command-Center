@@ -802,6 +802,7 @@ router.post("/plan/reorder", async (req, res): Promise<void> => {
     }
 
     let aiReflection: string | null = null;
+    let feedbackId: string | undefined;
 
     if (explanation?.trim() && movedItemId) {
       const movedDown = direction === "down";
@@ -856,26 +857,29 @@ Write a concise 2-3 sentence reflection (under 80 words) that is relevant to the
       });
 
       // New universal feedback capture — gives Coach access to Tony's reorder
-      // explanation + AI reflection. The legacy brainTrainingLogTable write
-      // above stays during transition.
-      recordFeedback({
-        agent: "tasks",
-        skill: "ai-organize",
-        sourceType: "reorder",
-        sourceId: movedItemId,
-        reviewText: explanation.trim(),
-        snapshotExtra: {
-          movedItemTitle,
-          fromPosition,
-          toPosition,
-          direction,
-          displacedItemTitles,
-          aiReflection,
-        },
-      }).catch(err => console.error("[plan/reorder] recordFeedback failed:", err));
+      // explanation + AI reflection. Awaited so the FE Brain Training save
+      // can fire a Train-now toast pointing at this exact row.
+      try {
+        const fb = await recordFeedback({
+          agent: "tasks",
+          skill: "ai-organize",
+          sourceType: "reorder",
+          sourceId: movedItemId,
+          reviewText: explanation.trim(),
+          snapshotExtra: {
+            movedItemTitle,
+            fromPosition,
+            toPosition,
+            direction,
+            displacedItemTitles,
+            aiReflection,
+          },
+        });
+        feedbackId = fb.feedbackId;
+      } catch (err) { console.error("[plan/reorder] recordFeedback failed:", err); }
     }
 
-    res.json({ ok: true, updated: items.length, aiReflection });
+    res.json({ ok: true, updated: items.length, aiReflection, feedback_id: feedbackId });
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }

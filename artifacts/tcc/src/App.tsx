@@ -344,6 +344,18 @@ export default function App() {
     }
   }, [view]);
 
+  // Listen for nav-from-toast events so any deeply-nested component can
+  // request a view switch without prop-drilling onSetView. Used by the
+  // shared "Train now" toast helper after feedback is submitted.
+  useEffect(() => {
+    const onNav = (e: Event) => {
+      const detail = (e as CustomEvent<{ view?: string }>).detail;
+      if (detail?.view) persistView(detail.view as View);
+    };
+    window.addEventListener("tcc-nav", onNav);
+    return () => window.removeEventListener("tcc-nav", onNav);
+  }, [persistView]);
+
   useEffect(() => {
     const i = setInterval(() => setClock(new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/Los_Angeles" })), 30000);
     return () => clearInterval(i);
@@ -913,7 +925,6 @@ export default function App() {
         reclassifying={reclassifying}
         loaded={sectionsLoaded.emails}
         lastEmailAiAt={lastEmailAiAt}
-        onSetView={v => persistView(v as View)}
       />
     </div>
   );

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, type CSSProperties } from "re
 import { get, post, patch, put, del } from "@/lib/api";
 import { C, F } from "@/components/tcc/constants";
 import { IdeasView } from "@/components/tcc/IdeasView";
+import { showTrainNowToast } from "@/lib/trainNowToast";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1813,7 +1814,7 @@ function MasterTaskTab({ onRefreshAll, categories, initialParentFilter, onInitia
     const movedUp = pendingDrop.toIdx < pendingDrop.fromIdx;
     const updates = pendingDrop.newTasks.map((t, i) => ({ id: t.id, priorityOrder: i }));
     try {
-      const result = await post<{ ok: boolean; aiReflection?: string }>("/plan/reorder", {
+      const result = await post<{ ok: boolean; aiReflection?: string; feedback_id?: string }>("/plan/reorder", {
         items: updates,
         movedItemId: pendingDrop.movedTask.id,
         movedItemTitle: pendingDrop.movedTask.title,
@@ -1823,6 +1824,15 @@ function MasterTaskTab({ onRefreshAll, categories, initialParentFilter, onInitia
         displacedItemTitles: pendingDrop.displacedTasks.map(t => t.title),
         explanation: trainingExplanation.trim(),
         direction: movedUp ? "up" : "down",
+      });
+      // Train-now toast — the reorder was just captured as agent_feedback
+      // for the tasks agent. Tony can train Coach on it directly.
+      showTrainNowToast({
+        agent: "tasks",
+        feedbackId: result.feedback_id ?? null,
+        sourceId: pendingDrop.movedTask.id,
+        title: "Reorder saved · brain trained",
+        description: "Train the tasks agent on this reorder?",
       });
       if (result.aiReflection) {
         // Success: show AI reflection (acts as success state). Modal stays open

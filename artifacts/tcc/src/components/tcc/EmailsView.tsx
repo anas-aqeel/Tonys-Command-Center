@@ -5,6 +5,7 @@ import { SmartTip } from "./SmartTip";
 import { EmailReplyModal } from "./EmailReplyModal";
 import { HoverCard } from "./HoverCard";
 import { showToast } from "./Toast";
+import { showTrainNowToast } from "@/lib/trainNowToast";
 import type { EmailItem } from "./types";
 
 interface NewEmail { from: string; subject: string; snippet: string; messageId: string }
@@ -24,10 +25,6 @@ interface Props {
   reclassifying?: boolean;
   loaded?: boolean;
   lastEmailAiAt?: Date | null;
-  /** Navigate to a top-level view (Header.onSetView contract). Used by the
-   *  "Train agent" toast action to jump into the Agent Training page after
-   *  feedback is recorded. */
-  onSetView?: (view: string) => void;
 }
 
 function formatRelativeAi(d: Date | null | undefined): string {
@@ -49,7 +46,7 @@ interface TrainingState {
   saved: boolean;
 }
 
-export function EmailsView({ emailsImportant, emailsFyi, emailsPromotions = [], snoozed, customTips, onSnooze, onDone, onTipSaved, onRefresh, unclassifiedEmails = [], onReclassify, reclassifying = false, loaded = true, lastEmailAiAt, onSetView }: Props) {
+export function EmailsView({ emailsImportant, emailsFyi, emailsPromotions = [], snoozed, customTips, onSnooze, onDone, onTipSaved, onRefresh, unclassifiedEmails = [], onReclassify, reclassifying = false, loaded = true, lastEmailAiAt }: Props) {
   const [replyEmail, setReplyEmail] = useState<EmailItem | null>(null);
   const [training, setTraining] = useState<TrainingState | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -125,25 +122,14 @@ export function EmailsView({ emailsImportant, emailsFyi, emailsPromotions = [], 
     setTimeout(() => setTraining(null), 1800);
 
     // Pop a "Train agent on this feedback?" toast with a 5s action button.
-    // Click stashes the hint in sessionStorage and navigates to the Agent
-    // Training page, which picks it up and pre-selects the feedback row.
-    if (res?.ok && onSetView) {
-      const hint = {
+    // The helper handles hint storage + navigation event dispatch.
+    if (res?.ok) {
+      showTrainNowToast({
         agent: "email",
         feedbackId: res.feedback_id ?? null,
         sourceId: String(e.id),
-        ts: Date.now(),
-      };
-      showToast({
         title: training.vote === "thumbs_up" ? "Marked as important" : "Marked as not important",
         description: "Train the email agent on this feedback?",
-        action: {
-          label: "Train now",
-          onClick: () => {
-            try { sessionStorage.setItem("tcc_pending_train", JSON.stringify(hint)); } catch { /**/ }
-            onSetView("agents");
-          },
-        },
       });
     }
   };

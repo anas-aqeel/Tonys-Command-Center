@@ -410,40 +410,49 @@ router.post("/ideas/notify-park", async (req, res): Promise<void> => {
     text?: string; category?: string; urgency?: string; ideaId?: string;
   };
 
-  recordFeedback({
-    agent: "ideas",
-    skill: "park-normal",
-    sourceType: "free_text",
-    sourceId: ideaId || text || "unknown",
-    rating: null,
-    reviewText: null,
-    snapshotExtra: { ideaText: text, category, urgency, action: "park" },
-  }).catch(err => console.error("[ideas/notify-park] recordFeedback failed:", err));
+  // Awaited (was fire-and-forget) so the FE can read feedback_id from the
+  // response and deep-link the "Train now" toast directly to this row.
+  let feedbackId: string | undefined;
+  try {
+    const fb = await recordFeedback({
+      agent: "ideas",
+      skill: "park-normal",
+      sourceType: "free_text",
+      sourceId: ideaId || text || "unknown",
+      rating: null,
+      reviewText: null,
+      snapshotExtra: { ideaText: text, category, urgency, action: "park" },
+    });
+    feedbackId = fb.feedbackId;
+  } catch (err) { console.error("[ideas/notify-park] recordFeedback failed:", err); }
 
   try {
     const slackText = `*Idea Parked by Tony*\n\n> ${text || "Untitled idea"}\n\n*Category:* ${category || "—"}\n*Urgency:* ${urgency || "—"}`;
     const r = await postSlackMessage({ channel: "U0991BD321Y", text: slackText });
-    res.json({ ok: true, slackOk: r.ok });
+    res.json({ ok: true, slackOk: r.ok, feedback_id: feedbackId });
   } catch (err) {
     console.warn("[ideas/notify-park] Slack DM failed:", err instanceof Error ? err.message : err);
-    res.json({ ok: true, slackOk: false });
+    res.json({ ok: true, slackOk: false, feedback_id: feedbackId });
   }
 });
 
 router.post("/ideas/notify-override", async (req, res): Promise<void> => {
   const { text, justification, ideaId } = req.body as { text?: string; justification?: string; ideaId?: string };
 
-  // New universal feedback capture — closes the lost-justification gap
-  // (today the justification only goes to Slack; Coach now sees it too).
-  recordFeedback({
-    agent: "ideas",
-    skill: "pushback",
-    sourceType: "override",
-    sourceId: ideaId || text || "unknown",
-    rating: -1,
-    reviewText: justification || null,
-    snapshotExtra: { ideaText: text, justification },
-  }).catch(err => console.error("[ideas/notify-override] recordFeedback failed:", err));
+  // Awaited so the FE gets feedback_id back for the Train-now toast hint.
+  let feedbackId: string | undefined;
+  try {
+    const fb = await recordFeedback({
+      agent: "ideas",
+      skill: "pushback",
+      sourceType: "override",
+      sourceId: ideaId || text || "unknown",
+      rating: -1,
+      reviewText: justification || null,
+      snapshotExtra: { ideaText: text, justification },
+    });
+    feedbackId = fb.feedbackId;
+  } catch (err) { console.error("[ideas/notify-override] recordFeedback failed:", err); }
 
   // Q1 (uniform): post to #engineering channel AND DM Ethan directly so every
   // variant has a consistent personal notification surface. Tony explicitly
@@ -459,7 +468,7 @@ router.post("/ideas/notify-override", async (req, res): Promise<void> => {
     await postSlackMessage({ channel: "U0991BD321Y", text: slackText });
     dmOk = true;
   } catch { /* swallow */ }
-  res.json({ ok: true, channelOk, dmOk });
+  res.json({ ok: true, channelOk, dmOk, feedback_id: feedbackId });
 });
 
 router.post("/ideas/escalate-to-ethan", async (req, res): Promise<void> => {
@@ -475,24 +484,28 @@ router.post("/ideas/escalate-to-ethan", async (req, res): Promise<void> => {
   };
 
   // B5-4: capture an escalate-feedback row so Coach can learn what Tony
-  // deems important enough to escalate. Fire-and-forget — do not block the
-  // notify/booking flow on a feedback write.
-  recordFeedback({
-    agent: "ideas",
-    skill: "classify",
-    sourceType: "escalate",
-    sourceId: ideaId || text || "unknown",
-    rating: null,
-    reviewText: reasoning || null,
-    snapshotExtra: {
-      ideaId: ideaId || null,
-      ideaText: text || null,
-      ideaCategory: category || null,
-      ideaUrgency: urgency || null,
-      reason: reasoning || null,
-      aiPriorityRank: rank ?? null,
-    },
-  }).catch(err => console.error("[ideas/escalate-to-ethan] recordFeedback failed:", err));
+  // deems important enough to escalate. Awaited so the FE Train-now toast
+  // can deep-link to this exact feedback row.
+  let feedbackId: string | undefined;
+  try {
+    const fb = await recordFeedback({
+      agent: "ideas",
+      skill: "classify",
+      sourceType: "escalate",
+      sourceId: ideaId || text || "unknown",
+      rating: null,
+      reviewText: reasoning || null,
+      snapshotExtra: {
+        ideaId: ideaId || null,
+        ideaText: text || null,
+        ideaCategory: category || null,
+        ideaUrgency: urgency || null,
+        reason: reasoning || null,
+        aiPriorityRank: rank ?? null,
+      },
+    });
+    feedbackId = fb.feedbackId;
+  } catch (err) { console.error("[ideas/escalate-to-ethan] recordFeedback failed:", err); }
 
   let slackOk = false;
   let calendarOk = false;
@@ -556,6 +569,7 @@ router.post("/ideas/escalate-to-ethan", async (req, res): Promise<void> => {
     calendarOk,
     meetingStart: scheduledStart,
     meetingEnd: scheduledEnd,
+    feedback_id: feedbackId,
   });
 });
 
