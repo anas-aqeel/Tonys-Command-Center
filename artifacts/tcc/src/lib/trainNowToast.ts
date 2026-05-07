@@ -43,7 +43,10 @@ export function showTrainNowToast(opts: TrainNowToastOpts): void {
       label: "Train now",
       onClick: () => {
         try { sessionStorage.setItem("tcc_pending_train", JSON.stringify(hint)); } catch { /* sessionStorage unavailable */ }
-        window.dispatchEvent(new CustomEvent(TCC_NAV_EVENT, { detail: { view: "agents" } }));
+        // Must match View type in App.tsx — "agents-settings" is the actual
+        // view key. "agents" silently falls through and lands somewhere else
+        // (Tony saw it land on the schedule page).
+        window.dispatchEvent(new CustomEvent(TCC_NAV_EVENT, { detail: { view: "agents-settings" } }));
       },
     },
   });
