@@ -10,6 +10,18 @@ import { resolveTier } from "./tier-resolver";
 import { getModel } from "./providers";
 import { anthropicToAiSdk, aiSdkToAnthropic, type AnthropicCallParams } from "./translators";
 import { getPricing } from "./model-catalog";
+import type { Tier } from "./feature-tiers";
+
+const VALID_TIERS: ReadonlySet<Tier> = new Set(["basic", "medium", "complex"]);
+
+// Pull a typed tier override out of the loose `meta` blob. Callers (agent
+// runtime) pass `meta.tierOverride` to force a specific tier independent of
+// the featureName-based default.
+function extractTierOverride(meta: Record<string, unknown> | undefined): Tier | undefined {
+  const raw = meta?.tierOverride;
+  if (typeof raw === "string" && VALID_TIERS.has(raw as Tier)) return raw as Tier;
+  return undefined;
+}
 
 // ─── Cost calculation (cache-aware, Anthropic only) ──────────────────────────
 const CACHE_CREATION_MULTIPLIER = 1.25; // 25% premium on cache writes (5m)
@@ -170,7 +182,7 @@ export async function createTrackedMessage(
   meta?: Record<string, unknown>,
 ): Promise<Anthropic.Message> {
   const start = Date.now();
-  const resolved = await resolveTier(featureName);
+  const resolved = await resolveTier(featureName, { tierOverride: extractTierOverride(meta) });
   const aiParams = anthropicToAiSdk(params, { provider: resolved.provider });
   const model = getModel(resolved.provider, resolved.model, resolved.apiKey, {
     baseUrl: resolved.baseUrl,
@@ -255,7 +267,7 @@ export async function createTrackedStream(
   meta?: Record<string, unknown>,
 ): Promise<StreamTextResult<ToolSet, never>> {
   const start = Date.now();
-  const resolved = await resolveTier(featureName);
+  const resolved = await resolveTier(featureName, { tierOverride: extractTierOverride(meta) });
   const aiParams = anthropicToAiSdk(params, { provider: resolved.provider });
   const model = getModel(resolved.provider, resolved.model, resolved.apiKey, {
     baseUrl: resolved.baseUrl,

@@ -25,10 +25,12 @@ export const FEATURE_TIER_MAP: Record<string, Tier> = {
   chat_thread_title: "basic",
   plaud_transcribe: "basic",
   demo_feedback: "basic",
+  brief_email_triage: "basic",  // 3-bucket classification, not synthesis
+  brief_claude_generate: "basic",  // hallucinated-fallback brief; cheap model is fine
+  agent_email_triage: "basic",  // same call routed via runtime; classification, not synthesis
 
   // ── MEDIUM: synthesis with context, drafting, summarization ─────────────
   brief_generate: "medium",
-  brief_email_triage: "medium",
   brief_anchor: "medium",
   email_draft: "medium",
   email_brain_regen: "medium",

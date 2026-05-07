@@ -9,11 +9,22 @@
 
 import { db, agentMemoryEntriesTable, agentSkillsTable } from "@workspace/db";
 import { and, eq, inArray } from "drizzle-orm";
+import type { Tier } from "@workspace/integrations-anthropic-ai";
 
 export interface CachedSystemBlock {
   type: "text";
   text: string;
   cache_control?: { type: "ephemeral" };
+}
+
+const VALID_TIERS: ReadonlySet<Tier> = new Set(["basic", "medium", "complex"]);
+
+// Narrow the DB column (`text`) to the runtime Tier union. Returns null when
+// the row's tier is missing or unrecognised — caller falls back to the
+// featureName-based default in that case.
+function narrowTier(raw: string | null): Tier | null {
+  if (raw && VALID_TIERS.has(raw as Tier)) return raw as Tier;
+  return null;
 }
 
 export interface SkillRecord {
@@ -24,6 +35,7 @@ export interface SkillRecord {
   tools: string[];
   memorySections: string[];
   modelOverride: string | null;
+  tier: Tier | null;
 }
 
 export async function loadSkill(agent: string, skillName: string): Promise<SkillRecord | null> {
@@ -40,6 +52,7 @@ export async function loadSkill(agent: string, skillName: string): Promise<Skill
     tools: Array.isArray(r.tools) ? r.tools as string[] : [],
     memorySections: Array.isArray(r.memorySections) ? r.memorySections as string[] : [],
     modelOverride: r.modelOverride,
+    tier: narrowTier(r.tier),
   };
 }
 
@@ -110,6 +123,10 @@ export interface BuiltPrompt {
   model: string;
   maxTokens: number;
   toolNames: string[];
+  /** Skill's declared tier — runtime passes this as tierOverride so the
+   *  wrapper bypasses the agent_* default in feature-tiers.ts. Null when
+   *  the DB row's tier column is missing/unrecognised. */
+  tier: Tier | null;
 }
 
 export async function buildPrompt(agent: string, skillName: string): Promise<BuiltPrompt> {
@@ -138,5 +155,6 @@ export async function buildPrompt(agent: string, skillName: string): Promise<Bui
     model: skill.model,
     maxTokens: skill.maxTokens,
     toolNames: skill.tools,
+    tier: skill.tier,
   };
 }

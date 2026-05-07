@@ -132,7 +132,17 @@ export async function runAgent(
       response = await createTrackedMessage(
         featureName,
         params,
-        { agent, skill: skillName, caller: input.caller || "direct", turn: turns, ...input.meta },
+        {
+          agent,
+          skill: skillName,
+          caller: input.caller || "direct",
+          turn: turns,
+          // Authoritative: skill's declared tier (from agent_skills.tier).
+          // Bypasses tierFor()'s agent_* → "complex" default so basic/medium
+          // skills run on their declared tier's provider+model.
+          ...(built.tier ? { tierOverride: built.tier } : {}),
+          ...input.meta,
+        },
       );
       // Accumulate token usage from this turn.
       const u = (response.usage ?? {}) as any;

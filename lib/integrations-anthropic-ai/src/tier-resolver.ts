@@ -46,12 +46,28 @@ function envFallbackKey(provider: Provider): string {
   return map[provider];
 }
 
+export interface ResolveTierOpts {
+  /**
+   * Explicit tier (e.g. read from agent_skills.tier). When set, the
+   * featureName-based lookup is skipped — caller knows better than tierFor().
+   * Used by the agent runtime so per-skill tier columns are authoritative.
+   */
+  tierOverride?: Tier;
+}
+
 /**
  * Resolve the active settings for the tier of `featureName`. Throws if no
  * row exists for the tier or no API key can be sourced (DB nor env).
+ *
+ * If `opts.tierOverride` is provided, it takes precedence over tierFor() —
+ * lets the agent runtime honor agent_skills.tier instead of falling through
+ * the agent_* default in the feature-tier map.
  */
-export async function resolveTier(featureName: string): Promise<ResolvedTier> {
-  const tier = tierFor(featureName);
+export async function resolveTier(
+  featureName: string,
+  opts: ResolveTierOpts = {},
+): Promise<ResolvedTier> {
+  const tier = opts.tierOverride ?? tierFor(featureName);
   const cached = cache.get(tier);
   if (cached && cached.expiresAt > Date.now()) return cached;
 
