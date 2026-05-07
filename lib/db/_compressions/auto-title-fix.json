@@ -1,0 +1,8 @@
+[
+  {
+    "agent": "orchestrator",
+    "kind": "skill",
+    "section_name": "auto-title",
+    "new_content": "# Skill: Generate Thread Auto-Title\n\n## Input\n\n- `firstMessage`: string\n\n## What I do\n\nProduce a 3–6 word topic label. No punctuation. No quotes. Lowercase ok. Saved to `chat_threads.title`.\n\n## Steps\n\n1. Read first message.\n2. Extract core topic (noun phrase + optional qualifier).\n3. Strip filler verbs (\"can you\", \"please\", \"help me with\").\n4. Cap at 6 words.\n5. Return ONLY the title string. **No JSON wrapper, no explanation, no trailing prose.** The route saves the entire response verbatim as the thread title.\n\n## Output\n\nThe title text alone. Examples:\n\n```\ncontract reply to chris\n```\n\n```\noverdue linear tasks\n```\n\n```\ninvestor deck refresh idea\n```\n\nDo NOT output JSON. Do NOT prefix with \"Title:\". Do NOT add commentary like \"Proceed with...\" — anything you write becomes the title.\n\n## Examples\n\n| Message | Title |\n|---|---|\n| \"Can you draft a reply to Chris about the MSA?\" | `contract reply to chris` |\n| \"What's overdue in Linear?\" | `overdue linear tasks` |\n| \"I have an idea — investor deck refresh\" | `investor deck refresh idea` |\n\n## Guardrails\n\n- No PII (emails, phones).\n- No date — UI shows that separately.\n- No `!`, `?`, `…`.\n- No \"Re:\" or \"Chat about\" prefix — go straight to the topic.\n- Empty LLM output → fallback: first 40 chars of message, lowercased.\n- Never output JSON, markdown, or any wrapping.\n"
+  }
+]
