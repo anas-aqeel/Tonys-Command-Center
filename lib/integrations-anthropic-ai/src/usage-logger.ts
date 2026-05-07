@@ -9,10 +9,16 @@ import type { StreamTextResult, ToolSet, GenerateTextResult } from "ai";
 import { resolveTier } from "./tier-resolver";
 import { getModel } from "./providers";
 import { anthropicToAiSdk, aiSdkToAnthropic, type AnthropicCallParams } from "./translators";
-import { getPricing } from "./model-catalog";
+import { getPricing, getPricingFromCatalog, type Provider } from "./model-catalog";
 import type { Tier } from "./feature-tiers";
 
 const VALID_TIERS: ReadonlySet<Tier> = new Set(["basic", "medium", "complex"]);
+const VALID_PROVIDERS: ReadonlySet<Provider> = new Set([
+  "anthropic",
+  "openai",
+  "google",
+  "openrouter",
+]);
 
 // Pull a typed tier override out of the loose `meta` blob. Callers (agent
 // runtime) pass `meta.tierOverride` to force a specific tier independent of
@@ -21,6 +27,32 @@ function extractTierOverride(meta: Record<string, unknown> | undefined): Tier | 
   const raw = meta?.tierOverride;
   if (typeof raw === "string" && VALID_TIERS.has(raw as Tier)) return raw as Tier;
   return undefined;
+}
+
+// Pull a typed provider override out of the loose `meta` blob. Caller (agent
+// runtime) sources this from agent_skills.provider_override so the resolver
+// re-reads ai_provider_settings for the chosen provider's row.
+function extractProviderOverride(meta: Record<string, unknown> | undefined): Provider | undefined {
+  const raw = meta?.providerOverride;
+  if (typeof raw === "string" && VALID_PROVIDERS.has(raw as Provider)) return raw as Provider;
+  return undefined;
+}
+
+// Pull the already-decrypted skill API key out of `meta`. Caller (agent
+// runtime) sources this from agent_skills.api_key_cipher (decrypted by the
+// prompt-builder). When set, tier-resolver uses it directly — it never reaches
+// into another tier's row for a key.
+function extractApiKeyOverride(meta: Record<string, unknown> | undefined): string | undefined {
+  const raw = meta?.apiKeyOverride;
+  return typeof raw === "string" && raw.length > 0 ? raw : undefined;
+}
+
+// Pull the optional skill base URL override out of `meta`. Used for
+// self-hosted OpenRouter proxies / Vertex regions when the skill carries
+// its own provider+key combo.
+function extractBaseUrlOverride(meta: Record<string, unknown> | undefined): string | undefined {
+  const raw = meta?.baseUrlOverride;
+  return typeof raw === "string" && raw.length > 0 ? raw : undefined;
 }
 
 // ─── Cost calculation (cache-aware, Anthropic only) ──────────────────────────
@@ -182,7 +214,12 @@ export async function createTrackedMessage(
   meta?: Record<string, unknown>,
 ): Promise<Anthropic.Message> {
   const start = Date.now();
-  const resolved = await resolveTier(featureName, { tierOverride: extractTierOverride(meta) });
+  const resolved = await resolveTier(featureName, {
+    tierOverride: extractTierOverride(meta),
+    providerOverride: extractProviderOverride(meta),
+    apiKeyOverride: extractApiKeyOverride(meta),
+    baseUrlOverride: extractBaseUrlOverride(meta),
+  });
   const aiParams = anthropicToAiSdk(params, { provider: resolved.provider });
   const model = getModel(resolved.provider, resolved.model, resolved.apiKey, {
     baseUrl: resolved.baseUrl,
@@ -195,7 +232,7 @@ export async function createTrackedMessage(
     const response = aiSdkToAnthropic(result, resolved.model);
     const durationMs = Date.now() - start;
 
-    const pricing = getPricing(resolved.model);
+    const pricing = await getPricingFromCatalog(resolved.model, resolved.provider);
     const usage = response.usage as any;
     const inputCost = computeInputCost(
       {
@@ -267,7 +304,12 @@ export async function createTrackedStream(
   meta?: Record<string, unknown>,
 ): Promise<StreamTextResult<ToolSet, never>> {
   const start = Date.now();
-  const resolved = await resolveTier(featureName, { tierOverride: extractTierOverride(meta) });
+  const resolved = await resolveTier(featureName, {
+    tierOverride: extractTierOverride(meta),
+    providerOverride: extractProviderOverride(meta),
+    apiKeyOverride: extractApiKeyOverride(meta),
+    baseUrlOverride: extractBaseUrlOverride(meta),
+  });
   const aiParams = anthropicToAiSdk(params, { provider: resolved.provider });
   const model = getModel(resolved.provider, resolved.model, resolved.apiKey, {
     baseUrl: resolved.baseUrl,
@@ -278,9 +320,9 @@ export async function createTrackedStream(
   const stream = streamText({
     model,
     ...(aiParams as any),
-    onFinish: ({ usage, providerMetadata }: { usage: unknown; providerMetadata?: unknown }) => {
+    onFinish: async ({ usage, providerMetadata }: { usage: unknown; providerMetadata?: unknown }) => {
       const durationMs = Date.now() - start;
-      const pricing = getPricing(resolved.model);
+      const pricing = await getPricingFromCatalog(resolved.model, resolved.provider);
       const aMeta = (((providerMetadata as any) ?? {}).anthropic ?? {}) as Record<string, unknown>;
       const inputTokens = (usage as any)?.inputTokens ?? 0;
       const outputTokens = (usage as any)?.outputTokens ?? 0;

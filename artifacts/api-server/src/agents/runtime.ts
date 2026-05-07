@@ -141,6 +141,19 @@ export async function runAgent(
           // Bypasses tierFor()'s agent_* → "complex" default so basic/medium
           // skills run on their declared tier's provider+model.
           ...(built.tier ? { tierOverride: built.tier } : {}),
+          // Per-skill provider override (agent_skills.provider_override). When
+          // set, tier-resolver re-reads ai_provider_settings for THAT provider
+          // so the call uses the override's API key and model — not the tier's
+          // default provider.
+          ...(built.providerOverride ? { providerOverride: built.providerOverride } : {}),
+          // Per-skill API key override (agent_skills.api_key_cipher, decrypted
+          // by prompt-builder). When set, tier-resolver uses this key directly
+          // — skill-level config is first-class and always wins.
+          ...(built.apiKeyOverride ? { apiKeyOverride: built.apiKeyOverride } : {}),
+          // Per-skill base URL (agent_skills.base_url). Used for self-hosted
+          // OpenRouter proxies / Vertex regions when the skill carries its own
+          // provider+key combo.
+          ...(built.baseUrl ? { baseUrlOverride: built.baseUrl } : {}),
           ...input.meta,
         },
       );

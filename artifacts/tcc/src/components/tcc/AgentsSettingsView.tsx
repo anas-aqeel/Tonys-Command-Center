@@ -7,9 +7,14 @@ import { C, F, FS } from "@/components/tcc/constants";
 
 type DetailTab = "training" | "memory" | "skills" | "runs";
 
-// Agents that have explicit UI feedback buttons wired up.
+// Agents that have feedback rows actively flowing into agent_feedback today.
+// (UI thumbs/buttons OR backend captures from override paths.)
 // All others show "Coming Soon" on the Training tab.
-const FEEDBACK_ENABLED_AGENTS = new Set(["email", "tasks", "ideas"]);
+//   - email   : EmailsView thumbs → /emails/action
+//   - tasks   : BusinessView reorder → /plan/reorder, priority override → /tasks
+//   - ideas   : IdeasModal park / override → /ideas/notify-{park,override}
+//   - schedule: forced calendar override → /schedule/add (no FE button, BE-only)
+const FEEDBACK_ENABLED_AGENTS = new Set(["email", "tasks", "ideas", "schedule"]);
 
 interface MemoryEntry {
   kind: string;
@@ -23,11 +28,48 @@ interface SkillEntry {
   agent: string;
   skillName: string;
   model: string;
+  tier: string | null;
   maxTokens: number;
   tools: string[];
   memorySections: string[];
   modelOverride: string | null;
+  providerOverride: string | null;
+  /** True when agent_skills.api_key_cipher is non-null. UI renders the input
+   *  with a "saved" placeholder; user types only to replace. */
+  apiKeyConfigured: boolean;
+  /** Optional per-skill base URL (e.g. self-hosted OpenRouter proxy). */
+  baseUrl: string | null;
   updatedAt: string;
+}
+
+interface CatalogModelRow {
+  provider: SkillProvider;
+  modelId: string;
+  inputPerM: number;
+  outputPerM: number;
+  displayName: string | null;
+  lastSyncedAt: string;
+}
+
+interface SkillTestResponse {
+  ok: boolean;
+  provider?: SkillProvider;
+  model?: string;
+  latencyMs?: number;
+  preview?: string;
+  error?: string;
+}
+
+type SkillProvider = "anthropic" | "openai" | "google" | "openrouter";
+
+interface AiTierRow {
+  tier: "basic" | "medium" | "complex";
+  provider: SkillProvider;
+  model: string;
+}
+interface AiSettingsResp {
+  tiers: AiTierRow[];
+  providers: SkillProvider[];
 }
 
 interface RunEntry {
@@ -334,7 +376,7 @@ function TrainingTabContent(props: TrainingTabProps) {
           Once feedback buttons are added in the relevant view, this training queue will become active.
         </div>
         <div style={{ marginTop: 20, fontSize: 12, color: C.sub, padding: "8px 14px", background: C.bg, borderRadius: 8, display: "inline-block" }}>
-          Active feedback: <strong>email · tasks · ideas</strong>
+          Active feedback: <strong>email · tasks · ideas · schedule</strong>
         </div>
       </div>
     );
@@ -676,29 +718,62 @@ function MemoryTab({ agent }: { agent: string }) {
 }
 
 // ── Skills tab ────────────────────────────────────────────────────────────────
+// Heuristic mirrors lib/integrations-anthropic-ai/src/feature-tiers.ts
+// for skills that aren't explicitly mapped (most agent skills default to
+// 'complex'). The resolved-model display falls back to this if the skill
+// row has no `tier` column populated yet.
+function inferTier(skill: SkillEntry): "basic" | "medium" | "complex" {
+  if (skill.tier === "basic" || skill.tier === "medium" || skill.tier === "complex") return skill.tier;
+  // agent_<x>_<skill> features default to 'complex' in the tier-resolver.
+  return "complex";
+}
+
+const SKILL_PROVIDERS: SkillProvider[] = ["anthropic", "openai", "google", "openrouter"];
+
 function SkillsTab({ agent }: { agent: string }) {
   const [skills, setSkills] = useState<SkillEntry[]>([]);
+  const [aiSettings, setAiSettings] = useState<AiSettingsResp | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     setLoading(true);
     setError("");
-    get<{ skills: SkillEntry[] }>(`/agents/${agent}/skills`)
-      .then(r => setSkills(r.skills))
+    Promise.all([
+      get<{ skills: SkillEntry[] }>(`/agents/${agent}/skills`),
+      get<AiSettingsResp>("/ai-settings").catch(() => null),
+    ])
+      .then(([s, ai]) => {
+        setSkills(s.skills);
+        setAiSettings(ai);
+      })
       .catch(err => setError(err instanceof Error ? err.message : String(err)))
       .finally(() => setLoading(false));
   }, [agent]);
 
-  const updateOverride = async (skillName: string, override: string | null) => {
+  const updateOverride = async (
+    skillName: string,
+    payload: {
+      model_override: string | null;
+      provider_override: SkillProvider | null;
+      api_key?: string | null;
+      base_url?: string | null;
+    },
+  ) => {
     try {
-      await put(`/agents/${agent}/skills/${skillName}/model-override`, { model_override: override });
+      await put(`/agents/${agent}/skills/${skillName}/model-override`, payload);
       const r = await get<{ skills: SkillEntry[] }>(`/agents/${agent}/skills`);
       setSkills(r.skills);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
   };
+
+  // Map tier → live (provider, model) from AI Settings — used when no override is set.
+  const tierMap: Record<string, { provider: SkillProvider; model: string }> = {};
+  if (aiSettings) {
+    for (const t of aiSettings.tiers) tierMap[t.tier] = { provider: t.provider, model: t.model };
+  }
 
   return (
     <div>
@@ -712,34 +787,374 @@ function SkillsTab({ agent }: { agent: string }) {
         ))
       )}
       {!loading && skills.length === 0 && <div style={{ color: C.mut, padding: 24 }}>No skills registered.</div>}
-      {skills.map(s => (
-        <div key={s.skillName} style={{ background: C.card, border: `1px solid ${C.brd}`, borderRadius: 8, padding: 12, marginBottom: 8 }}>
-          <div style={{ display: "flex", alignItems: "center", marginBottom: 6 }}>
-            <strong style={{ fontSize: 14, color: C.tx }}>{s.skillName}</strong>
-            <span style={{ marginLeft: 10, fontSize: 11, color: C.sub }}>
-              {s.modelOverride || s.model} · {s.maxTokens} tokens · {s.tools.length} tools · {s.memorySections.length} memory sections
-            </span>
-            <input
-              type="text"
-              defaultValue={s.modelOverride || ""}
-              placeholder="model override (e.g. claude-sonnet-4-6)"
-              onBlur={(e) => {
-                const v = e.target.value.trim();
-                if (v !== (s.modelOverride || "")) updateOverride(s.skillName, v || null);
-              }}
-              style={{ marginLeft: "auto", width: 220, padding: "4px 8px", fontSize: 11, border: `1px solid ${C.brd}`, borderRadius: 6 }}
-            />
-          </div>
-          {s.tools.length > 0 && (
-            <div style={{ fontSize: 11, color: C.mut, marginTop: 4 }}>
-              Tools: {s.tools.join(", ")}
-            </div>
-          )}
-        </div>
-      ))}
+      {skills.map(s => {
+        const tier = inferTier(s);
+        const tierResolved = tierMap[tier];
+        const hasOverride = !!s.modelOverride;
+        const resolvedModel = hasOverride
+          ? s.modelOverride!
+          : tierResolved?.model ?? s.model;
+        const resolvedProvider = hasOverride
+          ? (s.providerOverride as SkillProvider | null) ?? tierResolved?.provider ?? null
+          : tierResolved?.provider ?? null;
+
+        return (
+          <SkillRow
+            key={s.skillName}
+            agent={agent}
+            skill={s}
+            tier={tier}
+            resolvedModel={resolvedModel}
+            resolvedProvider={resolvedProvider}
+            hasOverride={hasOverride}
+            onSave={(payload) => updateOverride(s.skillName, payload)}
+          />
+        );
+      })}
     </div>
   );
 }
+
+function SkillRow({
+  agent,
+  skill,
+  tier,
+  resolvedModel,
+  resolvedProvider,
+  hasOverride,
+  onSave,
+}: {
+  agent: string;
+  skill: SkillEntry;
+  tier: "basic" | "medium" | "complex";
+  resolvedModel: string;
+  resolvedProvider: SkillProvider | null;
+  hasOverride: boolean;
+  onSave: (payload: {
+    model_override: string | null;
+    provider_override: SkillProvider | null;
+    api_key?: string | null;
+    base_url?: string | null;
+  }) => void;
+}) {
+  // Collapsed by default; expand to show the full provider+model+key+test form.
+  const [expanded, setExpanded] = useState(false);
+
+  // Form drafts.
+  const [modelDraft, setModelDraft] = useState<string>(skill.modelOverride ?? "");
+  const [providerDraft, setProviderDraft] = useState<SkillProvider | "">(
+    (skill.providerOverride as SkillProvider | null) ?? "",
+  );
+  const [apiKeyDraft, setApiKeyDraft] = useState<string>("");
+  const [showKey, setShowKey] = useState(false);
+  const [baseUrlDraft, setBaseUrlDraft] = useState<string>(skill.baseUrl ?? "");
+
+  // Per-row test/save status.
+  const [testing, setTesting] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [testResult, setTestResult] = useState<SkillTestResponse | null>(null);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
+
+  // Reset drafts when the skill row updates from the server (post-save reload).
+  useEffect(() => {
+    setModelDraft(skill.modelOverride ?? "");
+    setProviderDraft((skill.providerOverride as SkillProvider | null) ?? "");
+    setBaseUrlDraft(skill.baseUrl ?? "");
+    setApiKeyDraft("");
+  }, [skill.modelOverride, skill.providerOverride, skill.baseUrl, skill.apiKeyConfigured]);
+
+  // Live model catalog for the chosen provider — feeds the model combobox
+  // (mirrors ModelSettingsView). Falls back gracefully if the route is
+  // unreachable (skill row still works without suggestions).
+  const [catalog, setCatalog] = useState<CatalogModelRow[]>([]);
+  useEffect(() => {
+    if (!expanded || !providerDraft) { setCatalog([]); return; }
+    let cancelled = false;
+    get<CatalogModelRow[]>(`/ai-settings/models?provider=${providerDraft}`)
+      .then((rs) => { if (!cancelled) setCatalog(rs); })
+      .catch(() => { if (!cancelled) setCatalog([]); });
+    return () => { cancelled = true; };
+  }, [expanded, providerDraft]);
+
+  const onTest = async () => {
+    if (!providerDraft) {
+      setTestResult({ ok: false, error: "Pick a provider first." });
+      return;
+    }
+    if (!modelDraft.trim()) {
+      setTestResult({ ok: false, error: "Enter a model id first." });
+      return;
+    }
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const body: Record<string, unknown> = {
+        provider: providerDraft,
+        model: modelDraft.trim(),
+      };
+      if (apiKeyDraft) body.api_key = apiKeyDraft;
+      if (baseUrlDraft) body.base_url = baseUrlDraft;
+      const res = await post<SkillTestResponse>(
+        `/agents/${agent}/skills/${skill.skillName}/test-connection`,
+        body,
+      );
+      setTestResult(res);
+    } catch (err) {
+      setTestResult({
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const onSaveClick = async () => {
+    setSaving(true);
+    setSaveMsg(null);
+    try {
+      const o = modelDraft.trim() || null;
+      const p = o ? (providerDraft || null) : null; // clearing model clears provider too
+      const payload: {
+        model_override: string | null;
+        provider_override: SkillProvider | null;
+        api_key?: string | null;
+        base_url?: string | null;
+      } = {
+        model_override: o,
+        provider_override: p,
+      };
+      // api_key: only send when user typed something OR baseUrl draft differs
+      // — undefined leaves the saved key untouched.
+      if (apiKeyDraft) payload.api_key = apiKeyDraft;
+      if ((baseUrlDraft || null) !== (skill.baseUrl || null)) {
+        payload.base_url = baseUrlDraft || null;
+      }
+      onSave(payload);
+      setApiKeyDraft("");
+      setSaveMsg("Saved.");
+      setTimeout(() => setSaveMsg(null), 2200);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const onClearKey = () => {
+    if (!skill.apiKeyConfigured) return;
+    onSave({
+      model_override: skill.modelOverride,
+      provider_override: skill.providerOverride as SkillProvider | null,
+      api_key: null,
+    });
+    setApiKeyDraft("");
+  };
+
+  const cardStyle: React.CSSProperties = {
+    background: C.card,
+    border: `1px solid ${hasOverride || skill.apiKeyConfigured ? "#FCD34D" : C.brd}`,
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 8,
+  };
+
+  return (
+    <div style={cardStyle}>
+      {/* Header row — always visible */}
+      <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          style={{
+            background: "transparent", border: "none", cursor: "pointer",
+            color: C.sub, fontSize: 12, padding: 0, marginRight: 4,
+          }}
+          aria-label={expanded ? "Collapse" : "Expand"}
+        >
+          {expanded ? "▼" : "▶"}
+        </button>
+        <strong style={{ fontSize: 14, color: C.tx }}>{skill.skillName}</strong>
+        <span style={{
+          fontSize: 9, padding: "1px 6px", borderRadius: 4,
+          background: tier === "basic" ? "#FEF3C7" : tier === "medium" ? C.bluBg : "#F3E5F5",
+          color: tier === "basic" ? "#92400E" : tier === "medium" ? C.blu : "#7B1FA2",
+          textTransform: "uppercase", fontWeight: 700, letterSpacing: 0.5,
+        }}>{tier}</span>
+        <span style={{ fontSize: 11, color: C.sub, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>
+          {resolvedProvider ? `${resolvedProvider} / ` : ""}{resolvedModel}
+        </span>
+        {hasOverride && (
+          <span style={{ fontSize: 9, padding: "1px 5px", background: "#FEF3C7", color: "#92400E", borderRadius: 4, fontWeight: 600 }}>
+            OVERRIDE
+          </span>
+        )}
+        {skill.apiKeyConfigured && (
+          <span
+            style={{ fontSize: 9, padding: "1px 5px", background: C.grnBg, color: C.grn, borderRadius: 4, fontWeight: 600 }}
+            title="Skill has its own saved API key (wins over tier key)"
+          >
+            OWN KEY
+          </span>
+        )}
+        <span style={{ fontSize: 11, color: C.mut }}>
+          · {skill.maxTokens} tokens · {skill.tools.length} tools · {skill.memorySections.length} memory sections
+        </span>
+        {!expanded && (
+          <button
+            onClick={() => setExpanded(true)}
+            style={{ ...btnGhost, marginLeft: "auto" }}
+          >
+            Configure
+          </button>
+        )}
+      </div>
+
+      {skill.tools.length > 0 && (
+        <div style={{ fontSize: 11, color: C.mut, marginTop: 4, marginLeft: 22 }}>
+          Tools: {skill.tools.join(", ")}
+        </div>
+      )}
+
+      {/* Expanded form */}
+      {expanded && (
+        <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.brd}` }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <div>
+              <label style={lbl}>Provider override</label>
+              <select
+                value={providerDraft}
+                onChange={(e) => setProviderDraft(e.target.value as SkillProvider | "")}
+                style={inp}
+              >
+                <option value="">(inherit tier provider)</option>
+                {SKILL_PROVIDERS.map((p) => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label style={lbl}>Model override</label>
+              <input
+                list={`skill-models-${skill.skillName}`}
+                value={modelDraft}
+                onChange={(e) => setModelDraft(e.target.value)}
+                placeholder="e.g. gpt-4o-mini (blank = inherit tier model)"
+                spellCheck={false}
+                style={inp}
+              />
+              <datalist id={`skill-models-${skill.skillName}`}>
+                {catalog.map((r) => (
+                  <option key={r.modelId} value={r.modelId}>
+                    {r.displayName ?? r.modelId}
+                  </option>
+                ))}
+              </datalist>
+            </div>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <label style={lbl}>
+                API key {skill.apiKeyConfigured ? "(leave blank to keep saved key)" : "(leave blank to inherit from tier)"}
+              </label>
+              <div style={{ display: "flex", gap: 6 }}>
+                <input
+                  type={showKey ? "text" : "password"}
+                  value={apiKeyDraft}
+                  onChange={(e) => setApiKeyDraft(e.target.value)}
+                  placeholder={skill.apiKeyConfigured ? "•••••••••••• (saved)" : "Leave blank to inherit from tier"}
+                  autoComplete="off"
+                  style={{ ...inp, flex: 1 }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowKey((s) => !s)}
+                  style={btnGhost}
+                >
+                  {showKey ? "Hide" : "Show"}
+                </button>
+                {skill.apiKeyConfigured && (
+                  <button
+                    type="button"
+                    onClick={onClearKey}
+                    style={{ ...btnGhost, color: C.red }}
+                    title="Clear the skill's saved API key — falls back to tier provider's key."
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+            </div>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <label style={lbl}>Base URL (optional — for self-hosted proxies)</label>
+              <input
+                value={baseUrlDraft}
+                onChange={(e) => setBaseUrlDraft(e.target.value)}
+                placeholder="(leave blank for provider default)"
+                style={inp}
+              />
+            </div>
+          </div>
+
+          {/* Actions */}
+          <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center" }}>
+            <button
+              onClick={onTest}
+              disabled={testing || saving}
+              style={{
+                ...btnGhost,
+                cursor: testing ? "not-allowed" : "pointer",
+                opacity: testing ? 0.6 : 1,
+              }}
+              title="Run a 1-token call against (provider, model, key) to verify connectivity."
+            >
+              {testing ? "Testing…" : "Test connection"}
+            </button>
+            <button
+              onClick={onSaveClick}
+              disabled={saving || testing}
+              style={{
+                ...btn1,
+                background: saving ? C.mut : "#F97316",
+              }}
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+            {saveMsg && <span style={{ fontSize: 12, color: C.grn }}>{saveMsg}</span>}
+          </div>
+
+          {testResult && (
+            <div style={{
+              marginTop: 10, padding: 8, borderRadius: 6, fontSize: 12, lineHeight: 1.4,
+              background: testResult.ok ? C.grnBg : C.redBg,
+              color: testResult.ok ? C.grn : C.red,
+            }}>
+              {testResult.ok ? (
+                <>
+                  <strong>✓ Connection OK</strong>
+                  {testResult.provider && testResult.model ? ` — ${testResult.provider}/${testResult.model}` : ""}
+                  {typeof testResult.latencyMs === "number" ? ` · ${testResult.latencyMs} ms` : ""}
+                  {testResult.preview && (
+                    <div style={{ marginTop: 4, color: C.sub, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>
+                      "{testResult.preview}"
+                    </div>
+                  )}
+                </>
+              ) : (
+                <><strong>✗ Test failed</strong> — {testResult.error}</>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const lbl: React.CSSProperties = {
+  fontSize: 10, fontWeight: 700, color: C.sub, textTransform: "uppercase",
+  letterSpacing: 0.5, marginBottom: 4, display: "block",
+};
+const inp: React.CSSProperties = {
+  width: "100%", padding: "6px 10px", borderRadius: 6,
+  border: `1px solid ${C.brd}`, fontSize: 12, fontFamily: F, background: "#fff",
+  boxSizing: "border-box",
+};
 
 // ── Runs tab ──────────────────────────────────────────────────────────────────
 function RunsTab({ agent }: { agent: string }) {

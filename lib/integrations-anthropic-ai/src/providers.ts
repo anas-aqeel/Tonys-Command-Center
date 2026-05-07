@@ -75,10 +75,53 @@ export interface TestProviderResult {
 }
 
 /**
+ * Pre-flight: does the API key prefix match the chosen provider? Catches
+ * the easy mistake of pasting an Anthropic key (sk-ant-…) into the OpenAI
+ * field — without this, the user gets an OpenAI-shaped "Incorrect API key"
+ * which falsely implicates the key.
+ *
+ * OpenRouter accepts varied prefixes (sk-or-v1-…, plain UUIDs through some
+ * proxies) so we skip the check for it.
+ */
+function keyPrefixMismatch(provider: Provider, apiKey: string): string | null {
+  const k = apiKey.trim();
+  if (!k) return null; // empty handled by SDK
+  switch (provider) {
+    case "anthropic":
+      if (!k.startsWith("sk-ant-")) {
+        return `API key prefix doesn't match provider anthropic. Check key or provider selection.`;
+      }
+      return null;
+    case "openai":
+      // OpenAI keys start with sk-, but sk-ant- is Anthropic's and we want to flag it.
+      if (!k.startsWith("sk-") || k.startsWith("sk-ant-")) {
+        return `API key prefix doesn't match provider openai. Check key or provider selection.`;
+      }
+      return null;
+    case "google":
+      if (!k.startsWith("AIza")) {
+        return `API key prefix doesn't match provider google. Check key or provider selection.`;
+      }
+      return null;
+    case "openrouter":
+      return null; // varied prefixes — pass through
+    default: {
+      const exhaustive: never = provider;
+      return `Unknown provider: ${exhaustive}`;
+    }
+  }
+}
+
+/**
  * Run a tiny generation against the given (provider, model, key) to verify
  * connectivity + authentication + that the model id is valid. Surfaces the
  * provider's error message verbatim so the UI can show "model not found",
  * "401 invalid key", etc. directly.
+ *
+ * Throws synchronously with a "prefix doesn't match provider" message when
+ * the key shape is obviously wrong, so the user fixes the key/provider
+ * pairing before we ever hit the SDK (which would surface a misleading
+ * provider-shaped 401).
  */
 export async function testProvider(
   provider: Provider,
@@ -86,6 +129,9 @@ export async function testProvider(
   apiKey: string,
   opts: ProviderOpts = {},
 ): Promise<TestProviderResult> {
+  const mismatch = keyPrefixMismatch(provider, apiKey);
+  if (mismatch) throw new Error(mismatch);
+
   const model = getModel(provider, modelId, apiKey, opts);
   const t0 = Date.now();
   const result = await generateText({

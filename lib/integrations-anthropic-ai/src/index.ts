@@ -16,6 +16,7 @@ export { createTrackedMessage, createTrackedStream, logStreamedUsage } from "./u
 export { tierFor, type Tier } from "./feature-tiers";
 export { resolveTier, invalidateTierCache } from "./tier-resolver";
 export type { Provider, ModelSuggestion } from "./model-catalog";
-export { SUPPORTED_PROVIDERS, MODEL_SUGGESTIONS, MODEL_PRICING, getPricing } from "./model-catalog";
-export { encryptKey, decryptKey, isEncryptionConfigured, type EncryptedSecret } from "./secrets";
+export { SUPPORTED_PROVIDERS, MODEL_SUGGESTIONS, MODEL_PRICING, getPricing, getPricingFromCatalog, invalidateCatalogCache } from "./model-catalog";
+export { encryptKey, decryptKey, encryptKeyToString, decryptKeyFromString, isEncryptionConfigured, type EncryptedSecret } from "./secrets";
 export { getModel, testProvider, type TestProviderResult } from "./providers";
+export { syncProvider, syncAllProviders, type SyncResult } from "./model-discovery";

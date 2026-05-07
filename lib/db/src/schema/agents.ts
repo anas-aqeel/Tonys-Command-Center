@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, integer, jsonb, timestamp, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, integer, jsonb, numeric, timestamp, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
 // 5.1 Knowledge store — replaces filesystem .md files at runtime.
@@ -33,10 +33,36 @@ export const agentSkillsTable = pgTable("agent_skills", {
   memorySections: jsonb("memory_sections").notNull().default(sql`'[]'::jsonb`), // string[] of section_name
   autoExamples: jsonb("auto_examples").notNull().default(sql`'false'::jsonb`),  // boolean — Coach may auto-append examples
   modelOverride: text("model_override"),             // optional dashboard-set override (still wins over tier)
+  providerOverride: text("provider_override"),       // optional dashboard-set provider pin for the override (anthropic|openai|google|openrouter)
+  // First-class per-skill API key override. When set, runtime ignores the matching
+  // tier row's key and uses this skill's own key directly. Stored as a single
+  // text blob in `iv_b64:tag_b64:cipher_b64` form (encrypted via AES-256-GCM
+  // with the same SETTINGS_ENCRYPTION_KEY master key as ai_provider_settings).
+  // Null = inherit the tier provider's saved key (legacy behavior).
+  apiKeyCipher: text("api_key_cipher"),
+  // Optional base URL override (e.g. self-hosted OpenRouter proxy / Vertex region).
+  baseUrl: text("base_url"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [
   uniqueIndex("agent_skills_unique_idx").on(t.agent, t.skillName),
   index("agent_skills_agent_idx").on(t.agent),
+]);
+
+// 5.1d Model catalog — per-provider list of model IDs + USD pricing per 1M
+// tokens. Synced on demand from each provider's /v1/models endpoint (see
+// model-discovery.ts). Cost calc reads this; the in-memory MODEL_PRICING
+// constant in model-catalog.ts is the curated fallback for providers that
+// don't return live pricing in their list-models response.
+export const modelCatalogTable = pgTable("model_catalog", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  provider: text("provider").notNull(),                                    // 'anthropic' | 'openai' | 'google' | 'openrouter'
+  modelId: text("model_id").notNull(),
+  inputPerM: numeric("input_per_m", { precision: 10, scale: 4 }).notNull(),
+  outputPerM: numeric("output_per_m", { precision: 10, scale: 4 }).notNull(),
+  displayName: text("display_name"),
+  lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  uniqueIndex("model_catalog_provider_model_uniq").on(t.provider, t.modelId),
 ]);
 
 // 5.1c Tool registry — function-tool definitions parsed from TOOLS.md per agent.

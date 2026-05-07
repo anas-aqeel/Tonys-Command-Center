@@ -63,6 +63,15 @@ interface SuggestionsResponse {
   suggestions: ModelSuggestion[];
 }
 
+interface CatalogModelRow {
+  provider: Provider;
+  modelId: string;
+  inputPerM: number;
+  outputPerM: number;
+  displayName: string | null;
+  lastSyncedAt: string;
+}
+
 interface TestResponse {
   ok: boolean;
   provider: Provider;
@@ -141,13 +150,16 @@ function TierCard({ row, providers, onSaved }: { row: TierRow; providers: Provid
   const [baseUrl, setBaseUrl] = useState<string>(row.baseUrl ?? "");
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [suggestions, setSuggestions] = useState<ModelSuggestion[]>([]);
+  const [catalog, setCatalog] = useState<CatalogModelRow[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshMsg, setRefreshMsg] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<TestResponse | null>(null);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [errMsg, setErrMsg] = useState<string | null>(null);
 
-  // Load model suggestions when provider changes
+  // Curated suggestions (fallback when catalog is empty)
   useEffect(() => {
     let cancelled = false;
     get<SuggestionsResponse>(`/ai-settings/models/${provider}`)
@@ -155,6 +167,62 @@ function TierCard({ row, providers, onSaved }: { row: TierRow; providers: Provid
       .catch(() => { if (!cancelled) setSuggestions([]); });
     return () => { cancelled = true; };
   }, [provider]);
+
+  // Live catalog from model_catalog table — preferred datalist source.
+  // Empty list = no sync has run yet; the Refresh button below populates it.
+  const loadCatalog = async (p: Provider) => {
+    try {
+      const rows = await get<CatalogModelRow[]>(`/ai-settings/models?provider=${p}`);
+      setCatalog(rows);
+    } catch {
+      setCatalog([]);
+    }
+  };
+
+  useEffect(() => {
+    void loadCatalog(provider);
+  }, [provider]);
+
+  const onRefreshModels = async () => {
+    setRefreshing(true);
+    setRefreshMsg(null);
+    try {
+      const r = await post<{ ok: boolean; results: Record<string, { added: number; updated: number; errors: string[] }> }>(
+        `/ai-settings/sync-models`,
+        { provider },
+      );
+      const result = r.results[provider];
+      const errs = result?.errors ?? [];
+      if (errs.length > 0) {
+        setRefreshMsg(`Refreshed with errors: ${errs[0]}`);
+      } else {
+        setRefreshMsg(`Refreshed (${(result?.added ?? 0) + (result?.updated ?? 0)} models).`);
+      }
+      await loadCatalog(provider);
+      setTimeout(() => setRefreshMsg(null), 3500);
+    } catch (err) {
+      setRefreshMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  // Datalist combines live catalog + curated. Catalog wins on duplicate ids.
+  const datalistOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const out: Array<{ id: string; label: string }> = [];
+    for (const r of catalog) {
+      if (seen.has(r.modelId)) continue;
+      seen.add(r.modelId);
+      out.push({ id: r.modelId, label: r.displayName ?? r.modelId });
+    }
+    for (const s of suggestions) {
+      if (seen.has(s.id)) continue;
+      seen.add(s.id);
+      out.push({ id: s.id, label: s.name });
+    }
+    return out;
+  }, [catalog, suggestions]);
 
   const dirty = useMemo(() => (
     provider !== row.provider ||
@@ -260,10 +328,28 @@ function TierCard({ row, providers, onSaved }: { row: TierRow; providers: Provid
             spellCheck={false}
           />
           <datalist id={`models-${row.tier}`}>
-            {suggestions.map((s) => (
-              <option key={s.id} value={s.id}>{s.name}</option>
+            {datalistOptions.map((o) => (
+              <option key={o.id} value={o.id}>{o.label}</option>
             ))}
           </datalist>
+          <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 8 }}>
+            <button
+              type="button"
+              onClick={onRefreshModels}
+              disabled={refreshing}
+              style={{
+                padding: "4px 10px", border: `1px solid ${C.brd}`, background: C.card,
+                borderRadius: 6, cursor: refreshing ? "default" : "pointer", fontSize: 11, color: C.sub,
+              }}
+              title="Pull the live model list from the provider into model_catalog."
+            >
+              {refreshing ? "Refreshing…" : "↻ Refresh models"}
+            </button>
+            <span style={{ fontSize: 11, color: C.mut }}>
+              {catalog.length > 0 ? `${catalog.length} models in catalog` : "No models synced yet"}
+            </span>
+            {refreshMsg && <span style={{ fontSize: 11, color: C.sub }}>{refreshMsg}</span>}
+          </div>
         </div>
         <div style={{ gridColumn: "1 / -1" }}>
           <label style={lbl}>API key {row.keyConfigured ? "(leave blank to keep current)" : ""}</label>

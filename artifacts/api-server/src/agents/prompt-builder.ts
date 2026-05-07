@@ -9,7 +9,7 @@
 
 import { db, agentMemoryEntriesTable, agentSkillsTable } from "@workspace/db";
 import { and, eq, inArray } from "drizzle-orm";
-import type { Tier } from "@workspace/integrations-anthropic-ai";
+import { decryptKeyFromString, type Tier } from "@workspace/integrations-anthropic-ai";
 
 export interface CachedSystemBlock {
   type: "text";
@@ -35,7 +35,13 @@ export interface SkillRecord {
   tools: string[];
   memorySections: string[];
   modelOverride: string | null;
+  providerOverride: string | null;
   tier: Tier | null;
+  /** Already-decrypted skill API key (agent_skills.api_key_cipher). Null when
+   *  not configured — runtime then falls back to the provider's tier-row key. */
+  apiKeyOverride: string | null;
+  /** Optional base URL paired with apiKeyOverride (agent_skills.base_url). */
+  baseUrl: string | null;
 }
 
 export async function loadSkill(agent: string, skillName: string): Promise<SkillRecord | null> {
@@ -44,6 +50,23 @@ export async function loadSkill(agent: string, skillName: string): Promise<Skill
     .limit(1);
   if (rows.length === 0) return null;
   const r = rows[0];
+
+  // Decrypt the skill's own API key if present. Failures here are non-fatal —
+  // we log and fall through to tier-default behavior so a misconfigured key
+  // never bricks an agent.
+  const cipherBlob = (r as { apiKeyCipher?: string | null }).apiKeyCipher ?? null;
+  let apiKeyOverride: string | null = null;
+  if (cipherBlob) {
+    try {
+      apiKeyOverride = decryptKeyFromString(cipherBlob);
+    } catch (err) {
+      console.warn(
+        `[prompt-builder] decrypt failed for ${agent}.${skillName}; ignoring skill key:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+
   return {
     agent: r.agent,
     skillName: r.skillName,
@@ -52,7 +75,10 @@ export async function loadSkill(agent: string, skillName: string): Promise<Skill
     tools: Array.isArray(r.tools) ? r.tools as string[] : [],
     memorySections: Array.isArray(r.memorySections) ? r.memorySections as string[] : [],
     modelOverride: r.modelOverride,
+    providerOverride: (r as { providerOverride?: string | null }).providerOverride ?? null,
     tier: narrowTier(r.tier),
+    apiKeyOverride,
+    baseUrl: (r as { baseUrl?: string | null }).baseUrl ?? null,
   };
 }
 
@@ -127,6 +153,17 @@ export interface BuiltPrompt {
    *  wrapper bypasses the agent_* default in feature-tiers.ts. Null when
    *  the DB row's tier column is missing/unrecognised. */
   tier: Tier | null;
+  /** Skill's per-provider override (agent_skills.provider_override). Runtime
+   *  passes this as providerOverride so the resolver re-reads ai_provider_settings
+   *  for the chosen provider, switching API key + model accordingly. Null when
+   *  the column is empty (default tier-based provider applies). */
+  providerOverride: string | null;
+  /** Skill's own API key (already decrypted from agent_skills.api_key_cipher).
+   *  When set, runtime forwards as apiKeyOverride so the resolver uses this
+   *  key directly — first-class skill config. Null = inherit from tier provider. */
+  apiKeyOverride: string | null;
+  /** Skill's own base URL (agent_skills.base_url). Paired with apiKeyOverride. */
+  baseUrl: string | null;
 }
 
 export async function buildPrompt(agent: string, skillName: string): Promise<BuiltPrompt> {
@@ -156,5 +193,8 @@ export async function buildPrompt(agent: string, skillName: string): Promise<Bui
     maxTokens: skill.maxTokens,
     toolNames: skill.tools,
     tier: skill.tier,
+    providerOverride: skill.providerOverride,
+    apiKeyOverride: skill.apiKeyOverride,
+    baseUrl: skill.baseUrl,
   };
 }

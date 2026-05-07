@@ -3,17 +3,22 @@
 //   PATCH  /ai-settings/:tier                  → set provider/model/key for a tier
 //   POST   /ai-settings/:tier/test             → 1-token connectivity check
 //   GET    /ai-settings/models/:provider       → curated model suggestions for autocomplete
+//   GET    /ai-settings/models?provider=…      → live model_catalog rows for the provider
+//   POST   /ai-settings/sync-models            → refresh catalog from provider /v1/models
 
 import { Router, type IRouter } from "express";
-import { eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@workspace/db";
-import { aiProviderSettingsTable } from "../../lib/schema-v2";
+import { aiProviderSettingsTable, modelCatalogTable } from "../../lib/schema-v2";
 import {
   encryptKey,
   invalidateTierCache,
+  invalidateCatalogCache,
   MODEL_SUGGESTIONS,
   SUPPORTED_PROVIDERS,
+  syncAllProviders,
+  syncProvider,
   testProvider,
   type Provider,
 } from "@workspace/integrations-anthropic-ai";
@@ -186,6 +191,56 @@ router.post("/ai-settings/:tier/test", async (req, res): Promise<void> => {
       model: parsed.data.model,
       error: err instanceof Error ? err.message : String(err),
     });
+  }
+});
+
+// ─── Live model catalog (DB-backed) ─────────────────────────────────────────
+// GET /ai-settings/models?provider=openai → rows from model_catalog. Empty
+// list = no sync has run yet; UI shows a "Refresh" button instead of auto-
+// triggering (a sync hits 4 external APIs and we don't want to do it on
+// every page load).
+router.get("/ai-settings/models", async (req, res): Promise<void> => {
+  const provider = (req.query.provider as string | undefined)?.trim();
+  if (!provider || !(SUPPORTED_PROVIDERS as readonly string[]).includes(provider)) {
+    res.status(400).json({ error: `provider must be one of ${SUPPORTED_PROVIDERS.join(", ")}` });
+    return;
+  }
+  const rows = await db
+    .select()
+    .from(modelCatalogTable)
+    .where(eq(modelCatalogTable.provider, provider))
+    .orderBy(asc(modelCatalogTable.modelId));
+  res.json(rows.map((r) => ({
+    provider: r.provider,
+    modelId: r.modelId,
+    inputPerM: parseFloat(r.inputPerM),
+    outputPerM: parseFloat(r.outputPerM),
+    displayName: r.displayName,
+    lastSyncedAt: r.lastSyncedAt.toISOString(),
+  })));
+});
+
+// POST /ai-settings/sync-models { provider?: string } — pulls /v1/models from
+// the provider, joins with curated MODEL_PRICING (or live OpenRouter pricing),
+// and upserts into model_catalog. Returns per-provider {added, updated, errors}.
+const SyncBody = z.object({
+  provider: z.enum(SUPPORTED_PROVIDERS as unknown as [Provider, ...Provider[]]).optional(),
+});
+
+router.post("/ai-settings/sync-models", async (req, res): Promise<void> => {
+  const parsed = SyncBody.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+  try {
+    const results = parsed.data.provider
+      ? { [parsed.data.provider]: await syncProvider(parsed.data.provider) }
+      : await syncAllProviders();
+    invalidateCatalogCache();
+    res.json({ ok: true, results });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
   }
 });
 

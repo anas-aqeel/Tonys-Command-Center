@@ -95,3 +95,87 @@ export function getPricing(model: string): { inputPerM: number; outputPerM: numb
   }
   return { inputPerM: 0, outputPerM: 0 };
 }
+
+// ─── Async DB-backed pricing (preferred) ────────────────────────────────────
+// In-process TTL cache keyed by `${provider}:${model}` (or just model when
+// provider isn't known). Hit ratio is high — usage-logger calls this on
+// every AI request and the catalog changes only on Refresh Models.
+const CATALOG_TTL_MS = 5 * 60 * 1000;
+const _catalogCache = new Map<string, { value: { inputPerM: number; outputPerM: number }; expiresAt: number }>();
+
+let _catalogDb: any = null;
+let _catalogTable: any = null;
+let _catalogEq: any = null;
+let _catalogAnd: any = null;
+async function getCatalogDb(): Promise<{ db: any; table: any; eq: any; and: any } | null> {
+  if (_catalogDb !== null) {
+    return _catalogDb === false ? null : { db: _catalogDb, table: _catalogTable, eq: _catalogEq, and: _catalogAnd };
+  }
+  try {
+    const dbMod = await import("@workspace/db");
+    _catalogDb = dbMod.db;
+    _catalogTable = dbMod.modelCatalogTable;
+    const drizzleMod = await import("drizzle-orm");
+    _catalogEq = drizzleMod.eq;
+    _catalogAnd = drizzleMod.and;
+    return { db: _catalogDb, table: _catalogTable, eq: _catalogEq, and: _catalogAnd };
+  } catch {
+    _catalogDb = false;
+    return null;
+  }
+}
+
+/**
+ * Async pricing lookup: in-process cache (5 min) → model_catalog row →
+ * MODEL_PRICING constant → {0, 0} with warn. Provider is optional but
+ * narrows the lookup when callers know it (avoids picking the wrong row
+ * for a model id that exists under multiple providers, e.g. OpenRouter
+ * proxying anthropic/claude-haiku-4.5).
+ */
+export async function getPricingFromCatalog(
+  model: string,
+  provider?: string,
+): Promise<{ inputPerM: number; outputPerM: number }> {
+  const cacheKey = `${provider ?? "?"}:${model}`;
+  const cached = _catalogCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+  let value: { inputPerM: number; outputPerM: number } | null = null;
+  const ctx = await getCatalogDb();
+  if (ctx) {
+    try {
+      const where = provider
+        ? ctx.and(ctx.eq(ctx.table.provider, provider), ctx.eq(ctx.table.modelId, model))
+        : ctx.eq(ctx.table.modelId, model);
+      const rows = await ctx.db.select().from(ctx.table).where(where).limit(1);
+      const row = rows[0];
+      if (row) {
+        value = {
+          inputPerM: parseFloat(row.inputPerM),
+          outputPerM: parseFloat(row.outputPerM),
+        };
+      }
+    } catch {
+      // DB unavailable — fall through to in-memory constant.
+    }
+  }
+  if (!value) {
+    const fallback = MODEL_PRICING[model];
+    if (fallback) {
+      value = fallback;
+    } else {
+      if (process.env.NODE_ENV !== "production") {
+        console.warn(`[model-catalog] unknown model='${model}' (provider='${provider ?? "?"}') — cost will log as 0.`);
+      }
+      value = { inputPerM: 0, outputPerM: 0 };
+    }
+  }
+  _catalogCache.set(cacheKey, { value, expiresAt: Date.now() + CATALOG_TTL_MS });
+  return value;
+}
+
+/** Drop the in-process pricing cache. Called by sync-models so the next
+ *  cost calc picks up the freshly-synced rates. */
+export function invalidateCatalogCache(): void {
+  _catalogCache.clear();
+}

@@ -48,3 +48,31 @@ export function decryptKey(blob: EncryptedSecret): string {
 export function isEncryptionConfigured(): boolean {
   return Boolean(process.env.SETTINGS_ENCRYPTION_KEY);
 }
+
+// ─── Single-column packed format (iv_b64:tag_b64:cipher_b64) ────────────────
+// Used by agent_skills.api_key_cipher (a plain `text` column) so we don't have
+// to add three bytea columns just to mirror ai_provider_settings. The packed
+// blob still goes through encryptKey/decryptKey — same algo, same master key.
+
+/** Encrypt a plaintext API key into a single colon-separated base64 blob. */
+export function encryptKeyToString(plaintext: string): string {
+  const enc = encryptKey(plaintext);
+  return [
+    enc.iv.toString("base64"),
+    enc.tag.toString("base64"),
+    enc.cipher.toString("base64"),
+  ].join(":");
+}
+
+/** Decrypt a colon-separated base64 blob produced by encryptKeyToString. */
+export function decryptKeyFromString(blob: string): string {
+  const parts = blob.split(":");
+  if (parts.length !== 3) {
+    throw new Error("decryptKeyFromString: expected iv:tag:cipher base64 blob");
+  }
+  return decryptKey({
+    iv: Buffer.from(parts[0], "base64"),
+    tag: Buffer.from(parts[1], "base64"),
+    cipher: Buffer.from(parts[2], "base64"),
+  });
+}

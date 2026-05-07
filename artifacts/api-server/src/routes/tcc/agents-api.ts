@@ -138,7 +138,7 @@ router.post("/proposals/:proposalId/approve", async (req, res): Promise<void> =>
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
   try {
-    await applyApprovedProposal(id, parsed.data.decided_by || "unknown");
+    await applyApprovedProposal(id, parsed.data.decided_by || "You");
     res.json({ ok: true });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
@@ -151,7 +151,7 @@ router.post("/proposals/:proposalId/reject", async (req, res): Promise<void> => 
   const parsed = DecisionBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
-  await rejectProposal(id, parsed.data.decided_by || "unknown", parsed.data.rejection_reason);
+  await rejectProposal(id, parsed.data.decided_by || "You", parsed.data.rejection_reason);
   res.json({ ok: true });
 });
 
@@ -275,11 +275,31 @@ router.get("/agents/:agent/skills", async (req, res): Promise<void> => {
     .where(eq(agentSkillsTable.agent, agent))
     .orderBy(asc(agentSkillsTable.skillName));
 
-  res.json({ skills: rows });
+  // Redact the encrypted api_key_cipher blob — the UI only needs to know
+  // whether one is configured, not the ciphertext itself. Expose a boolean.
+  const skills = rows.map((r) => {
+    const cipher = (r as { apiKeyCipher?: string | null }).apiKeyCipher ?? null;
+    const baseUrl = (r as { baseUrl?: string | null }).baseUrl ?? null;
+    const { apiKeyCipher: _omit, ...rest } = r as typeof r & { apiKeyCipher?: string | null };
+    return { ...rest, apiKeyConfigured: Boolean(cipher), baseUrl };
+  });
+
+  res.json({ skills });
 });
 
 const SkillOverrideBody = z.object({
   model_override: z.string().nullable(),
+  // Optional: pin the override to a specific provider. Without this, the
+  // override resolves under whatever provider the tier currently maps to.
+  provider_override: z.enum(["anthropic", "openai", "google", "openrouter"]).nullable().optional(),
+  // Optional: per-skill API key (first-class — when set, skill-level wins over
+  // tier-level). Pass empty string to clear; null also clears; undefined leaves
+  // unchanged. A non-empty string is encrypted with the same AES-256-GCM helper
+  // used by ai_provider_settings (encryptKeyToString → packed iv:tag:cipher b64).
+  api_key: z.string().nullable().optional(),
+  // Optional: per-skill base URL (e.g. self-hosted OpenRouter proxy). Same
+  // null/undefined semantics as api_key.
+  base_url: z.string().nullable().optional(),
 });
 
 router.put("/agents/:agent/skills/:skill/model-override", async (req, res): Promise<void> => {
@@ -290,11 +310,100 @@ router.put("/agents/:agent/skills/:skill/model-override", async (req, res): Prom
   const parsed = SkillOverrideBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
+  const updates: Partial<typeof agentSkillsTable.$inferInsert> = {
+    modelOverride: parsed.data.model_override,
+    updatedAt: new Date(),
+  };
+  if (parsed.data.provider_override !== undefined) {
+    updates.providerOverride = parsed.data.provider_override;
+  }
+  if (parsed.data.base_url !== undefined) {
+    updates.baseUrl = parsed.data.base_url || null;
+  }
+  if (parsed.data.api_key !== undefined) {
+    if (parsed.data.api_key === null || parsed.data.api_key === "") {
+      updates.apiKeyCipher = null;
+    } else {
+      try {
+        const { encryptKeyToString } = await import("@workspace/integrations-anthropic-ai");
+        updates.apiKeyCipher = encryptKeyToString(parsed.data.api_key);
+      } catch (err) {
+        res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+        return;
+      }
+    }
+  }
+
   await db.update(agentSkillsTable)
-    .set({ modelOverride: parsed.data.model_override, updatedAt: new Date() })
+    .set(updates)
     .where(and(eq(agentSkillsTable.agent, agent), eq(agentSkillsTable.skillName, skillName)));
 
   res.json({ ok: true });
+});
+
+// ── Per-skill connectivity test ─────────────────────────────────────────────
+// Mirrors POST /ai-settings/:tier/test but scoped to one skill row. If api_key
+// is omitted in the body, falls back to the skill's saved api_key_cipher
+// (decrypts and uses it).
+const SkillTestBody = z.object({
+  provider: z.enum(["anthropic", "openai", "google", "openrouter"]),
+  model: z.string().min(1),
+  api_key: z.string().min(1).optional(),
+  base_url: z.string().nullable().optional(),
+});
+
+router.post("/agents/:agent/skills/:skill/test-connection", async (req, res): Promise<void> => {
+  const agent = req.params.agent;
+  const skillName = req.params.skill;
+  if (!agent || !skillName) { res.status(400).json({ error: "agent + skill required" }); return; }
+
+  const parsed = SkillTestBody.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+
+  let apiKey = parsed.data.api_key;
+  if (!apiKey) {
+    // Use the skill's saved key — decrypt agent_skills.api_key_cipher.
+    const [row] = await db.select().from(agentSkillsTable)
+      .where(and(eq(agentSkillsTable.agent, agent), eq(agentSkillsTable.skillName, skillName)))
+      .limit(1);
+    const cipher = (row as { apiKeyCipher?: string | null } | undefined)?.apiKeyCipher;
+    if (!cipher) {
+      res.status(400).json({
+        ok: false,
+        error: "No saved skill API key; provide api_key in the body or save one first.",
+      });
+      return;
+    }
+    try {
+      const { decryptKeyFromString } = await import("@workspace/integrations-anthropic-ai");
+      apiKey = decryptKeyFromString(cipher);
+    } catch (err) {
+      res.status(500).json({ ok: false, error: `Decrypt failed: ${err instanceof Error ? err.message : String(err)}` });
+      return;
+    }
+  }
+
+  try {
+    const { testProvider } = await import("@workspace/integrations-anthropic-ai");
+    const t0 = Date.now();
+    const result = await testProvider(parsed.data.provider, parsed.data.model, apiKey, {
+      baseUrl: parsed.data.base_url ?? undefined,
+    });
+    res.json({
+      ok: true,
+      provider: parsed.data.provider,
+      model: parsed.data.model,
+      latencyMs: result.durationMs ?? (Date.now() - t0),
+      preview: result.preview,
+    });
+  } catch (err) {
+    res.status(400).json({
+      ok: false,
+      provider: parsed.data.provider,
+      model: parsed.data.model,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 });
 
 // ── Direct skill invocation (for fixture replay scripts) ─────────────────────
