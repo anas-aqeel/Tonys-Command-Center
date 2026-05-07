@@ -17,10 +17,11 @@
 
 import type { ToolHandler } from "./index.js";
 
-// ─── Coach (7) ────────────────────────────────────────────────────────────────
+// ─── Coach (8) ────────────────────────────────────────────────────────────────
 import readAgentFiles from "./coach/read_agent_files.js";
 import readFeedback from "./coach/read_feedback.js";
 import readRecentFeedback from "./coach/read_recent_feedback.js";
+import readRecentProposals from "./coach/read_recent_proposals.js";
 import readRunHistory from "./coach/read_run_history.js";
 import submitProposal from "./coach/submit_proposal.js";
 import appendToEvaluationLog from "./coach/append_to_evaluation_log.js";
@@ -102,6 +103,7 @@ export const HANDLER_REGISTRY: Map<string, ToolHandler> = new Map([
   ["coach/read_agent_files", readAgentFiles],
   ["coach/read_feedback", readFeedback],
   ["coach/read_recent_feedback", readRecentFeedback],
+  ["coach/read_recent_proposals", readRecentProposals],
   ["coach/read_run_history", readRunHistory],
   ["coach/submit_proposal", submitProposal],
   ["coach/append_to_evaluation_log", appendToEvaluationLog],
