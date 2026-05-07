@@ -106,22 +106,29 @@ router.post("/emails/action", async (req, res): Promise<void> => {
 
     // New universal feedback capture (no-op when FEEDBACK_PIPELINE_ENABLED=false).
     // Runs alongside the legacy email_training write during transition.
-    recordFeedback({
-      agent: "email",
-      skill: "triage.classifyBatch",
-      sourceType: "thumbs",
-      sourceId: String(emailId || sender || "unknown"),
-      rating: action === "thumbs_up" ? 1 : -1,
-      reviewText: reason || null,
-      snapshotExtra: { senderEmail: sender, subject, body: reason },
-    }).catch(err => console.error("[emails] recordFeedback failed:", err));
+    // Awaited (was fire-and-forget) so the FE gets feedback_id back in the
+    // response — the toast action uses it to deep-link into the Train page
+    // with this exact row pre-selected.
+    let feedbackId: string | undefined;
+    try {
+      const fb = await recordFeedback({
+        agent: "email",
+        skill: "triage.classifyBatch",
+        sourceType: "thumbs",
+        sourceId: String(emailId || sender || "unknown"),
+        rating: action === "thumbs_up" ? 1 : -1,
+        reviewText: reason || null,
+        snapshotExtra: { senderEmail: sender, subject, body: reason },
+      });
+      feedbackId = fb.feedbackId;
+    } catch (err) { console.error("[emails] recordFeedback failed:", err); }
 
     // Brain regeneration moved to Coach Train button (Phase 6 onwards):
     // every thumbs feedback writes to agent_feedback (above), and Tony reviews
     // patterns + clicks Train to fire Coach. Auto-fire-on-threshold removed.
     const countResult = await db.select().from(emailTrainingTable);
     const totalSamples = countResult.length;
-    res.json({ ok: true, message: `Training saved (${totalSamples} samples — review via Train button on Email agent settings)` });
+    res.json({ ok: true, feedback_id: feedbackId, message: `Training saved (${totalSamples} samples — review via Train button on Email agent settings)` });
     return;
   }
 

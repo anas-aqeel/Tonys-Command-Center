@@ -128,19 +128,52 @@ interface ProposalRow {
   createdAt: string;
 }
 
+// Hint left in sessionStorage by feedback surfaces (EmailsView thumbs, etc.)
+// when the user clicks "Train now" in a toast. Picked up here on mount so we
+// can open the right agent + pre-select the row.
+interface PendingTrainHint {
+  agent: string;
+  feedbackId: string | null;
+  sourceId: string | null;
+  ts: number;
+}
+
+function readPendingTrainHint(): PendingTrainHint | null {
+  try {
+    const raw = sessionStorage.getItem("tcc_pending_train");
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PendingTrainHint;
+    // 5-min freshness gate — if Tony left the tab open and clicks the toast
+    // action much later, the hint is stale and we'd surprise him.
+    if (Date.now() - parsed.ts > 5 * 60 * 1000) {
+      sessionStorage.removeItem("tcc_pending_train");
+      return null;
+    }
+    return parsed;
+  } catch { return null; }
+}
+
 export function AgentsSettingsView({ onBack }: { onBack: () => void }) {
   const [agents, setAgents] = useState<AgentEntry[]>([]);
   const [pipelineEnabled, setPipelineEnabled] = useState(false);
   const [pipelineLoading, setPipelineLoading] = useState(true);
   const [agentsLoading, setAgentsLoading] = useState(true);
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
+  const [pendingHint, setPendingHint] = useState<PendingTrainHint | null>(() => readPendingTrainHint());
 
   useEffect(() => {
     get<AgentsList>("/agents")
       .then(d => {
         setAgents(d.agents);
         setPipelineEnabled(d.feedback_pipeline_enabled);
-        if (d.agents.length > 0 && !selectedAgent) setSelectedAgent(d.agents[0].name);
+        if (d.agents.length > 0 && !selectedAgent) {
+          // If a "Train now" hint pointed us at a specific agent, open that
+          // tab — otherwise default to the first one in the registry.
+          const target = pendingHint && d.agents.find(a => a.name === pendingHint.agent)
+            ? pendingHint.agent
+            : d.agents[0].name;
+          setSelectedAgent(target);
+        }
       })
       .catch(console.error)
       .finally(() => {
@@ -149,6 +182,13 @@ export function AgentsSettingsView({ onBack }: { onBack: () => void }) {
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Once the AgentDetail consumes the hint (auto-select + scroll), it calls
+  // back to clear it so a re-render or sidebar click doesn't re-trigger.
+  const consumeHint = () => {
+    setPendingHint(null);
+    try { sessionStorage.removeItem("tcc_pending_train"); } catch { /**/ }
+  };
 
   return (
     <div style={{ maxWidth: 1200, margin: "0 auto", padding: "20px 24px", fontFamily: F }}>
@@ -209,7 +249,12 @@ export function AgentsSettingsView({ onBack }: { onBack: () => void }) {
         {/* Detail */}
         <div>
           {selectedAgent
-            ? <AgentDetail agent={selectedAgent} pipelineEnabled={pipelineEnabled} />
+            ? <AgentDetail
+                agent={selectedAgent}
+                pipelineEnabled={pipelineEnabled}
+                pendingHint={pendingHint && pendingHint.agent === selectedAgent ? pendingHint : null}
+                onHintConsumed={consumeHint}
+              />
             : agentsLoading
               ? <div style={{ padding: 24, color: C.mut }}>Loading agents…</div>
               : <div style={{ padding: 24, color: C.mut }}>Pick an agent from the sidebar.</div>}
@@ -219,7 +264,12 @@ export function AgentsSettingsView({ onBack }: { onBack: () => void }) {
   );
 }
 
-function AgentDetail({ agent, pipelineEnabled }: { agent: string; pipelineEnabled: boolean }) {
+function AgentDetail({ agent, pipelineEnabled, pendingHint, onHintConsumed }: {
+  agent: string;
+  pipelineEnabled: boolean;
+  pendingHint: PendingTrainHint | null;
+  onHintConsumed: () => void;
+}) {
   const [state, setState] = useState<TrainingState | null>(null);
   const [feedback, setFeedback] = useState<FeedbackRow[]>([]);
   const [proposals, setProposals] = useState<ProposalRow[]>([]);
@@ -228,6 +278,11 @@ function AgentDetail({ agent, pipelineEnabled }: { agent: string; pipelineEnable
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   const [error, setError] = useState<string>("");
+  // Pre-train disclaimer modal: when Tony has 1 row selected but >1 unconsumed
+  // exist, surface a one-question modal nudging him to either include them all
+  // (one Coach run, cost-saving) or proceed with just the selected row.
+  const [confirmTrain, setConfirmTrain] = useState<{ selectedCount: number; allUnconsumedIds: string[] } | null>(null);
+  const [hintBanner, setHintBanner] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
@@ -254,6 +309,26 @@ function AgentDetail({ agent, pipelineEnabled }: { agent: string; pipelineEnable
     setSelected(new Set());
   }, [agent, refresh]);
 
+  // Consume the "Train now"-toast hint once feedback rows are loaded for this
+  // agent. Match strategy: feedback_id (exact) → source_id fallback. Newest
+  // matching row wins (feedback list is ordered desc by createdAt).
+  useEffect(() => {
+    if (!pendingHint || feedback.length === 0) return;
+    const match = pendingHint.feedbackId
+      ? feedback.find(f => f.id === pendingHint.feedbackId)
+      : pendingHint.sourceId
+        ? feedback.find(f => (f as { sourceId?: string; source_id?: string }).sourceId === pendingHint.sourceId || (f as { source_id?: string }).source_id === pendingHint.sourceId)
+        : null;
+    if (match) {
+      setSelected(new Set([match.id]));
+      setHintBanner(`Pre-selected the ${pendingHint.agent} feedback you just submitted — review and click Train.`);
+    } else {
+      setHintBanner(`Couldn't find that feedback in the list — it may already be consumed. Pick rows manually.`);
+    }
+    onHintConsumed();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingHint, feedback]);
+
   const toggle = (id: string) => {
     const s = new Set(selected);
     if (s.has(id)) s.delete(id);
@@ -263,14 +338,15 @@ function AgentDetail({ agent, pipelineEnabled }: { agent: string; pipelineEnable
   const selectAll = () => setSelected(new Set(feedback.map(f => f.id)));
   const clearAll = () => setSelected(new Set());
 
-  const startTraining = async () => {
-    if (selected.size === 0) return;
+  // The actual training-start fetch. Split out so the disclaimer modal can
+  // call it directly with whichever id-set Tony chose ("just selected" vs
+  // "all unconsumed").
+  const fireTraining = async (ids: string[]) => {
+    if (ids.length === 0) return;
     setTraining(true);
     setError("");
     try {
-      await post("/agents/" + agent + "/training/start", {
-        feedback_ids: Array.from(selected),
-      });
+      await post("/agents/" + agent + "/training/start", { feedback_ids: ids });
       setSelected(new Set());
       await refresh();
     } catch (err) {
@@ -278,6 +354,23 @@ function AgentDetail({ agent, pipelineEnabled }: { agent: string; pipelineEnable
     } finally {
       setTraining(false);
     }
+  };
+
+  const startTraining = () => {
+    if (selected.size === 0) return;
+    // Cost-saving nudge: if Tony has just 1 row selected but more unconsumed
+    // rows exist for this agent, ONE Coach run can chew through all of them.
+    // Show the modal so he picks "all available" (cheaper) or "just selected".
+    const allUnconsumed = feedback.filter(f => {
+      const consumed = (f as { consumedAt?: string | null; consumed_at?: string | null }).consumedAt
+        ?? (f as { consumed_at?: string | null }).consumed_at;
+      return consumed == null;
+    }).map(f => f.id);
+    if (selected.size === 1 && allUnconsumed.length > 1) {
+      setConfirmTrain({ selectedCount: selected.size, allUnconsumedIds: allUnconsumed });
+      return;
+    }
+    fireTraining(Array.from(selected));
   };
 
   const decide = async (proposalId: string, action: "approve" | "reject", reason?: string) => {
@@ -315,6 +408,24 @@ function AgentDetail({ agent, pipelineEnabled }: { agent: string; pipelineEnable
 
   return (
     <div>
+      {/* Hint banner — surfaces when AgentDetail mounted from a "Train now"
+          toast click. Tells Tony which row was pre-selected (or that we
+          couldn't find it) so the auto-select isn't surprising. */}
+      {hintBanner && (
+        <div style={{
+          background: C.bluBg, border: `1px solid ${C.blu}`, borderRadius: 8,
+          padding: "10px 14px", marginBottom: 12, fontSize: 13, color: C.blu,
+          display: "flex", alignItems: "center", gap: 10,
+        }}>
+          <span style={{ fontSize: 16 }}>💡</span>
+          <span style={{ flex: 1 }}>{hintBanner}</span>
+          <button onClick={() => setHintBanner(null)} style={{
+            background: "transparent", border: "none", color: C.blu, cursor: "pointer",
+            fontSize: 16, padding: 0, lineHeight: 1,
+          }}>✕</button>
+        </div>
+      )}
+
       {/* Tabs */}
       <div style={{ display: "flex", gap: 4, marginBottom: 12, borderBottom: `1px solid ${C.brd}` }}>
         {(["training", "memory", "skills", "runs"] as DetailTab[]).map(t => (
@@ -333,6 +444,43 @@ function AgentDetail({ agent, pipelineEnabled }: { agent: string; pipelineEnable
           </button>
         ))}
       </div>
+
+      {/* Pre-train cost-saving disclaimer modal */}
+      {confirmTrain && (
+        <div
+          onClick={() => setConfirmTrain(null)}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 10000, display: "flex", alignItems: "center", justifyContent: "center" }}
+        >
+          <div onClick={e => e.stopPropagation()} style={{ background: C.card, borderRadius: 12, padding: 24, maxWidth: 480, width: "92%" }}>
+            <div style={{ fontSize: 17, fontWeight: 700, color: C.tx, marginBottom: 8, fontFamily: FS }}>
+              Train on all available feedback?
+            </div>
+            <div style={{ fontSize: 13, color: C.sub, lineHeight: 1.5, marginBottom: 18 }}>
+              You selected <strong>1 feedback</strong>, but there are <strong>{confirmTrain.allUnconsumedIds.length - 1}</strong> more unconsumed rows for <strong style={{ textTransform: "capitalize" }}>{agent}</strong>. Training all together is <strong>one Coach run</strong> instead of {confirmTrain.allUnconsumedIds.length} — saves cost, and Coach finds patterns across the batch instead of treating each in isolation.
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <button
+                onClick={() => { const ids = confirmTrain.allUnconsumedIds; setConfirmTrain(null); fireTraining(ids); }}
+                style={{ ...btn1, background: C.grn, width: "100%", padding: "10px 14px", fontSize: 13 }}
+              >
+                Continue with all {confirmTrain.allUnconsumedIds.length} available feedback
+              </button>
+              <button
+                onClick={() => { const ids = Array.from(selected); setConfirmTrain(null); fireTraining(ids); }}
+                style={{ ...btnGhost, width: "100%", padding: "10px 14px", fontSize: 13 }}
+              >
+                Continue anyway (just the 1 I selected)
+              </button>
+              <button
+                onClick={() => setConfirmTrain(null)}
+                style={{ background: "transparent", border: "none", color: C.mut, fontSize: 12, fontFamily: F, cursor: "pointer", padding: "6px 0", marginTop: 4 }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {tab === "memory" && <MemoryTab agent={agent} />}
       {tab === "skills" && <SkillsTab agent={agent} />}

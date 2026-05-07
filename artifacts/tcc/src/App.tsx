@@ -913,6 +913,7 @@ export default function App() {
         reclassifying={reclassifying}
         loaded={sectionsLoaded.emails}
         lastEmailAiAt={lastEmailAiAt}
+        onSetView={v => persistView(v as View)}
       />
     </div>
   );

@@ -3,11 +3,17 @@ import { C, F } from "./constants";
 
 type Variant = "success" | "error" | "info";
 
+interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
 interface ToastItem {
   id: number;
   title: string;
   description?: string;
   variant: Variant;
+  action?: ToastAction;
 }
 
 let counter = 0;
@@ -18,21 +24,29 @@ function emit() {
   for (const l of listeners) l(memory);
 }
 
-export function showToast(input: { title: string; description?: string; variant?: Variant; duration?: number }): void {
+export function showToast(input: { title: string; description?: string; variant?: Variant; duration?: number; action?: ToastAction }): void {
   const id = ++counter;
   const item: ToastItem = {
     id,
     title: input.title,
     description: input.description,
     variant: input.variant ?? "success",
+    action: input.action,
   };
   memory = [...memory, item];
   emit();
-  const dur = input.duration ?? 3500;
+  // Toasts with an action stick around longer (5s default vs 3.5s) so the
+  // user has time to react. Caller can still override via `duration`.
+  const dur = input.duration ?? (input.action ? 5000 : 3500);
   setTimeout(() => {
     memory = memory.filter(t => t.id !== id);
     emit();
   }, dur);
+}
+
+function dismissToast(id: number) {
+  memory = memory.filter(t => t.id !== id);
+  emit();
 }
 
 export function ToastViewport() {
@@ -86,6 +100,16 @@ export function ToastViewport() {
               </div>
               {item.description && (
                 <div style={{ fontSize: 12, color: C.sub, lineHeight: 1.4 }}>{item.description}</div>
+              )}
+              {item.action && (
+                <button
+                  onClick={() => { item.action!.onClick(); dismissToast(item.id); }}
+                  style={{
+                    marginTop: 8, padding: "5px 12px", borderRadius: 6,
+                    border: `1px solid ${accent}`, background: bg, color: accent,
+                    fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: F,
+                  }}
+                >{item.action.label}</button>
               )}
             </div>
           </div>
