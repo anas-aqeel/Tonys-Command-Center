@@ -24,6 +24,23 @@ const URG_COLOR: Record<string, string> = {
   Now: "#DC2626", "This Week": "#D97706", "This Month": "#2563EB", Someday: "#6B7280",
 };
 
+// Relative-time formatter for the parking-lot cards. "2h ago", "3d ago",
+// then falls back to "Mar 12" once it's older than a week. Tony scans this
+// list quickly — a relative number is faster to read than a date.
+function timeAgo(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const ms = Date.now() - new Date(iso).getTime();
+  if (Number.isNaN(ms)) return "";
+  const m = Math.floor(ms / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  if (d < 7) return `${d}d ago`;
+  return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "America/Los_Angeles" });
+}
+
 // ─── Idea Detail Modal ───────────────────────────────────────────────────────
 function IdeaDetailModal({ idea, onClose, onUpdated, onDeleted, onCreateTask }: {
   idea: any;
@@ -52,6 +69,25 @@ function IdeaDetailModal({ idea, onClose, onUpdated, onDeleted, onCreateTask }: 
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [parking, setParking] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [notifying, setNotifying] = useState<null | "slack" | "email" | "ethan">(null);
+  // Slack ID for the current assignee, looked up from /ideas/team-members on
+  // first AI Reflection tab open. Used to enable/disable the Slack button +
+  // surface a tooltip explaining why it's disabled.
+  const [assigneeSlackId, setAssigneeSlackId] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (tab !== "ai" || assigneeSlackId !== undefined) return;
+    if (!idea.assigneeName && !idea.assigneeEmail) { setAssigneeSlackId(null); return; }
+    get<{ ok: boolean; members: Array<{ name: string; email: string | null; slackId?: string | null }> }>("/ideas/team-members")
+      .then(res => {
+        if (!res?.ok) { setAssigneeSlackId(null); return; }
+        const m = res.members.find(mm =>
+          (idea.assigneeName && mm.name?.toLowerCase() === String(idea.assigneeName).toLowerCase()) ||
+          (idea.assigneeEmail && mm.email && mm.email.toLowerCase() === String(idea.assigneeEmail).toLowerCase())
+        );
+        setAssigneeSlackId(m?.slackId || null);
+      })
+      .catch(() => setAssigneeSlackId(null));
+  }, [tab, assigneeSlackId, idea.assigneeName, idea.assigneeEmail]);
 
   const hasChanges = form.text !== (idea.text || "") || form.category !== (idea.category || "") ||
     form.urgency !== (idea.urgency || "") || form.techType !== (idea.techType || "") ||
@@ -75,6 +111,9 @@ function IdeaDetailModal({ idea, onClose, onUpdated, onDeleted, onCreateTask }: 
           text: form.text,
           rank: null,
           reasoning: `Urgency escalated from ${idea.urgency} to ${form.urgency}`,
+          ideaId: idea.id,
+          category: form.category,
+          urgency: form.urgency,
         }).catch(() => {});
       }
     } catch { /* ignore */ }
@@ -94,6 +133,7 @@ function IdeaDetailModal({ idea, onClose, onUpdated, onDeleted, onCreateTask }: 
           onUpdated({ ...idea, ...res.idea });
           setForm(f => ({ ...f, category: res.idea.category || f.category, urgency: res.idea.urgency || f.urgency, techType: res.idea.techType || f.techType }));
         }
+        showToast({ title: "Reflection updated" });
       } else {
         setAiReflection({ error: res?.error || "AI returned an unexpected response. Please try again." });
       }
@@ -105,6 +145,49 @@ function IdeaDetailModal({ idea, onClose, onUpdated, onDeleted, onCreateTask }: 
       setAiReflection({ error: `AI rethink failed: ${msg}` });
     }
     setRethinking(false);
+  };
+
+  const handleNotifySlack = async () => {
+    if (notifying) return;
+    setNotifying("slack");
+    try {
+      const r = await post<{ ok: boolean; error?: string }>(`/ideas/${idea.id}/notify-assignee-slack`, {});
+      if (r?.ok) showToast({ title: "Slack DM sent to assignee" });
+      else showToast({ title: "Couldn't DM assignee", description: r?.error || "Slack send failed", variant: "error" });
+    } catch (err) {
+      showToast({ title: "Couldn't DM assignee", description: err instanceof Error ? err.message : String(err), variant: "error" });
+    }
+    setNotifying(null);
+  };
+
+  const handleNotifyEmail = async () => {
+    if (notifying) return;
+    setNotifying("email");
+    try {
+      const r = await post<{ ok: boolean; error?: string }>(`/ideas/${idea.id}/notify-assignee-email`, {});
+      if (r?.ok) showToast({ title: "Email sent to assignee" });
+      else showToast({ title: "Couldn't email assignee", description: r?.error || "Email send failed", variant: "error" });
+    } catch (err) {
+      showToast({ title: "Couldn't email assignee", description: err instanceof Error ? err.message : String(err), variant: "error" });
+    }
+    setNotifying(null);
+  };
+
+  // Notify Ethan reuses the existing /ideas/notify-park endpoint — same Slack
+  // DM channel (Ethan's user ID) used elsewhere for "park-only" notifications.
+  const handleNotifyEthan = async () => {
+    if (notifying) return;
+    setNotifying("ethan");
+    try {
+      const r = await post<{ ok: boolean; slackOk?: boolean }>("/ideas/notify-park", {
+        text: idea.text, category: idea.category, urgency: idea.urgency, ideaId: idea.id,
+      });
+      if (r?.slackOk) showToast({ title: "Ethan notified on Slack" });
+      else showToast({ title: "Slack DM may have failed", description: "Check #engineering or retry", variant: "error" });
+    } catch (err) {
+      showToast({ title: "Couldn't notify Ethan", description: err instanceof Error ? err.message : String(err), variant: "error" });
+    }
+    setNotifying(null);
   };
 
   const handleDelete = async () => {
@@ -141,38 +224,47 @@ function IdeaDetailModal({ idea, onClose, onUpdated, onDeleted, onCreateTask }: 
   const inp: React.CSSProperties = { width: "100%", padding: "8px 10px", borderRadius: 7, border: `1px solid ${C.brd}`, fontFamily: F, fontSize: 13, background: "#fff", boxSizing: "border-box" };
   const lbl: React.CSSProperties = { fontSize: 11, fontWeight: 700, color: C.sub, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4, display: "block" };
 
+  const urgAccent = URG_COLOR[idea.urgency] || "#888";
+
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 10000, display: "flex", justifyContent: "flex-end" }} onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={{ width: 520, maxWidth: "95vw", background: C.bg, height: "100vh", overflowY: "auto", boxShadow: "-4px 0 20px rgba(0,0,0,0.15)" }}>
-        {/* Header */}
-        <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.brd}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div>
-            <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
-              <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 4, background: CAT_COLOR[idea.category] || "#888", color: "#fff" }}>{idea.category}</span>
-              <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 4, background: URG_COLOR[idea.urgency] || "#888", color: "#fff" }}>{idea.urgency}</span>
-              {/* Status pill — override and parked are distinct: override = "Tony forced this through despite AI pushback", parked = "intentionally deferred to Someday". They can also stack (override first, then later parked). */}
-              {isOverride && (
-                <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: "#FEE2E2", color: "#DC2626" }}>override</span>
-              )}
-              {isParked && (
-                <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: "#F3F4F6", color: "#6B7280" }}>parked</span>
-              )}
-              {!isOverride && !isParked && (
-                <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: "#DCFCE7", color: "#166534" }}>active</span>
-              )}
+      <div style={{ width: 540, maxWidth: "95vw", background: C.bg, height: "100vh", overflowY: "auto", boxShadow: "-4px 0 20px rgba(0,0,0,0.15)", borderTop: `3px solid ${urgAccent}` }}>
+        {/* Header — title prominent on top, badges in a single row below */}
+        <div style={{ padding: "18px 22px 14px", borderBottom: `1px solid ${C.brd}`, background: C.card }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 10 }}>
+            <div style={{ fontSize: 16, fontWeight: 700, fontFamily: FS, color: C.tx, lineHeight: 1.35, flex: 1 }}>
+              {idea.text.substring(0, 80)}{idea.text.length > 80 ? "…" : ""}
             </div>
-            <div style={{ fontSize: 15, fontWeight: 700, fontFamily: FS }}>{idea.text.substring(0, 60)}{idea.text.length > 60 ? "..." : ""}</div>
+            <button onClick={onClose} title="Close" style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: C.mut, lineHeight: 1, padding: 0, flexShrink: 0 }}>✕</button>
           </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: C.mut }}>✕</button>
+          <div style={{ display: "flex", gap: 5, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 4, background: CAT_COLOR[idea.category] || "#888", color: "#fff", letterSpacing: 0.2 }}>{idea.category}</span>
+            <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 4, background: URG_COLOR[idea.urgency] || "#888", color: "#fff", letterSpacing: 0.2 }}>{idea.urgency}</span>
+            {idea.techType && <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: "#E5E7EB", color: "#374151" }}>{idea.techType}</span>}
+            {/* Status pill — override and parked are distinct: override = "Tony forced this through despite AI pushback", parked = "intentionally deferred to Someday". They can also stack (override first, then later parked). */}
+            {isOverride && (
+              <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 4, background: "#FEE2E2", color: "#DC2626" }}>OVERRIDE</span>
+            )}
+            {isParked && (
+              <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: "#F3F4F6", color: "#6B7280" }}>parked</span>
+            )}
+            {!isOverride && !isParked && (
+              <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: "#DCFCE7", color: "#166534" }}>active</span>
+            )}
+            {idea.linearIdentifier && <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: "#EBF5FF", color: "#2563EB", fontFamily: "monospace" }}>{idea.linearIdentifier}</span>}
+          </div>
         </div>
 
-        {/* Tabs */}
-        <div style={{ display: "flex", borderBottom: `1px solid ${C.brd}` }}>
+        {/* Tabs — cleaner, with the active tab using the orange brand accent
+            instead of a flat black underline so it matches the rest of TCC. */}
+        <div style={{ display: "flex", borderBottom: `1px solid ${C.brd}`, background: C.card }}>
           {(["details", "ai"] as const).map(t => (
             <button key={t} onClick={() => setTab(t)} style={{
-              flex: 1, padding: "10px 0", fontSize: 13, fontWeight: 600, fontFamily: F, cursor: "pointer",
-              background: "none", border: "none", borderBottom: tab === t ? "2px solid #111" : "2px solid transparent",
+              flex: 1, padding: "11px 0", fontSize: 13, fontWeight: 600, fontFamily: F, cursor: "pointer",
+              background: "none", border: "none",
+              borderBottom: tab === t ? "2px solid #F97316" : "2px solid transparent",
               color: tab === t ? "#111" : C.mut,
+              transition: "color 0.12s",
             }}>{t === "details" ? "Details" : "AI Reflection"}</button>
           ))}
         </div>
@@ -181,11 +273,14 @@ function IdeaDetailModal({ idea, onClose, onUpdated, onDeleted, onCreateTask }: 
           {/* ── Details Tab ── */}
           {tab === "details" && (
             <div>
-              <div style={{ marginBottom: 12 }}>
+              <div style={{ marginBottom: 14 }}>
                 <label style={lbl}>Idea Text</label>
                 <textarea value={form.text} onChange={e => setForm(f => ({ ...f, text: e.target.value }))} rows={3} style={{ ...inp, resize: "vertical" }} />
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+
+              {/* Classification block */}
+              <div style={{ fontSize: 10, fontWeight: 700, color: C.mut, textTransform: "uppercase", letterSpacing: 0.6, margin: "6px 0 8px" }}>Classification</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
                 <div>
                   <label style={lbl}>Category</label>
                   <select value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))} style={inp}>{CATS.map(c => <option key={c}>{c}</option>)}</select>
@@ -195,7 +290,7 @@ function IdeaDetailModal({ idea, onClose, onUpdated, onDeleted, onCreateTask }: 
                   <select value={form.urgency} onChange={e => setForm(f => ({ ...f, urgency: e.target.value }))} style={inp}>{URGS.map(u => <option key={u}>{u}</option>)}</select>
                 </div>
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 18 }}>
                 <div>
                   <label style={lbl}>Type</label>
                   <select value={form.techType} onChange={e => setForm(f => ({ ...f, techType: e.target.value }))} style={inp}>
@@ -208,7 +303,10 @@ function IdeaDetailModal({ idea, onClose, onUpdated, onDeleted, onCreateTask }: 
                   <input type="date" value={form.dueDate} onChange={e => setForm(f => ({ ...f, dueDate: e.target.value }))} style={inp} />
                 </div>
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+
+              {/* Assignment block */}
+              <div style={{ fontSize: 10, fontWeight: 700, color: C.mut, textTransform: "uppercase", letterSpacing: 0.6, margin: "6px 0 8px" }}>Assignment</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 18 }}>
                 <div>
                   <label style={lbl}>Assignee Name</label>
                   <input value={form.assigneeName} onChange={e => setForm(f => ({ ...f, assigneeName: e.target.value }))} style={inp} placeholder="e.g. Ethan" />
@@ -304,6 +402,70 @@ function IdeaDetailModal({ idea, onClose, onUpdated, onDeleted, onCreateTask }: 
                   <div style={{ fontSize: 11, marginTop: 4 }}>AI will re-evaluate the category, urgency, priority, and business fit</div>
                 </div>
               )}
+
+              {/* Action buttons — share this reflection with assignee or Ethan */}
+              {aiReflection && !aiReflection.error && (() => {
+                const hasAssignee = !!(idea.assigneeName || idea.assigneeEmail);
+                const slackTooltip = !hasAssignee ? "No assignee on this idea" : !idea.assigneeName ? "Assignee name missing" : assigneeSlackId === undefined ? "Looking up Slack ID…" : assigneeSlackId ? "" : "No Slack ID for assignee";
+                const slackEnabled = hasAssignee && !!idea.assigneeName && !!assigneeSlackId;
+                const emailTooltip = !idea.assigneeEmail ? "No email for assignee" : "";
+                const emailEnabled = !!idea.assigneeEmail;
+                return (
+                  <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 6 }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: C.mut, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 2 }}>Share reflection</div>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button
+                        onClick={handleNotifySlack}
+                        disabled={!slackEnabled || notifying === "slack"}
+                        title={slackTooltip || "DM the assignee on Slack with this reflection"}
+                        style={{
+                          flex: 1, padding: "8px 10px", borderRadius: 7,
+                          border: `1px solid ${slackEnabled ? "#1D9353" : C.brd}`,
+                          background: slackEnabled ? "#E8F5E9" : "#F3F4F6",
+                          color: slackEnabled ? "#1D9353" : C.mut,
+                          fontSize: 11, fontWeight: 700, fontFamily: F,
+                          cursor: slackEnabled && notifying !== "slack" ? "pointer" : "not-allowed",
+                          opacity: slackEnabled ? 1 : 0.55,
+                        }}
+                      >
+                        {notifying === "slack" ? "Sending…" : "💬 Slack assignee"}
+                      </button>
+                      <button
+                        onClick={handleNotifyEmail}
+                        disabled={!emailEnabled || notifying === "email"}
+                        title={emailTooltip || "Email the assignee this reflection"}
+                        style={{
+                          flex: 1, padding: "8px 10px", borderRadius: 7,
+                          border: `1px solid ${emailEnabled ? "#1565C0" : C.brd}`,
+                          background: emailEnabled ? "#EFF6FF" : "#F3F4F6",
+                          color: emailEnabled ? "#1565C0" : C.mut,
+                          fontSize: 11, fontWeight: 700, fontFamily: F,
+                          cursor: emailEnabled && notifying !== "email" ? "pointer" : "not-allowed",
+                          opacity: emailEnabled ? 1 : 0.55,
+                        }}
+                      >
+                        {notifying === "email" ? "Sending…" : "📧 Email assignee"}
+                      </button>
+                      <button
+                        onClick={handleNotifyEthan}
+                        disabled={notifying === "ethan"}
+                        title="DM Ethan on Slack about this idea"
+                        style={{
+                          flex: 1, padding: "8px 10px", borderRadius: 7,
+                          border: `1px solid #F97316`,
+                          background: "#FFF7ED",
+                          color: "#C2410C",
+                          fontSize: 11, fontWeight: 700, fontFamily: F,
+                          cursor: notifying === "ethan" ? "not-allowed" : "pointer",
+                          opacity: notifying === "ethan" ? 0.6 : 1,
+                        }}
+                      >
+                        {notifying === "ethan" ? "Notifying…" : "🚨 Notify Ethan"}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           )}
         </div>
@@ -352,27 +514,70 @@ export function IdeasView({ ideas, onIdeasChange, onCreateTask, onNavigate, onNe
       ) : filtered.length === 0 ? (
         <div style={{ textAlign: "center", padding: 40, color: C.mut }}>No ideas found</div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {filtered.map(idea => (
-            <div key={idea.id} onClick={() => setSelectedIdea(idea)} style={{
-              background: C.card, border: `1px solid ${C.brd}`, borderRadius: 10, padding: "12px 18px",
-              cursor: "pointer", transition: "box-shadow 0.15s", display: "flex", justifyContent: "space-between", alignItems: "center",
-            }} onMouseEnter={e => (e.currentTarget.style.boxShadow = "0 2px 8px rgba(0,0,0,0.08)")} onMouseLeave={e => (e.currentTarget.style.boxShadow = "none")}>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 14, fontWeight: 600, color: C.tx, marginBottom: 5 }}>{idea.text}</div>
-                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 4, background: CAT_COLOR[idea.category] || "#888", color: "#fff" }}>{idea.category}</span>
-                  <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 4, background: URG_COLOR[idea.urgency] || "#888", color: "#fff" }}>{idea.urgency}</span>
-                  {idea.techType && <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: "#E5E7EB", color: "#374151" }}>{idea.techType}</span>}
-                  <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: idea.status === "override" ? "#FEE2E2" : "#F3F4F6", color: idea.status === "override" ? "#DC2626" : "#6B7280" }}>{idea.status}</span>
-                  {idea.linearIdentifier && <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: "#EBF5FF", color: "#2563EB" }}>{idea.linearIdentifier}</span>}
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {filtered.map(idea => {
+            const urgColor = URG_COLOR[idea.urgency] || "#888";
+            const catColor = CAT_COLOR[idea.category] || "#888";
+            const createdTitle = idea.createdAt ? new Date(idea.createdAt).toLocaleString("en-US", { timeZone: "America/Los_Angeles" }) : "";
+            return (
+              // Card uses a colored left accent (urgency) so Tony can spot
+              // "Now"/"This Week" rows at a glance — denser padding + a single
+              // row of badges to keep the list scannable.
+              <div
+                key={idea.id}
+                onClick={() => setSelectedIdea(idea)}
+                style={{
+                  background: C.card,
+                  border: `1px solid ${C.brd}`,
+                  borderLeft: `4px solid ${urgColor}`,
+                  borderRadius: 8,
+                  padding: "10px 14px 10px 12px",
+                  cursor: "pointer",
+                  transition: "all 0.12s",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                }}
+                onMouseEnter={e => {
+                  e.currentTarget.style.boxShadow = "0 2px 10px rgba(0,0,0,0.06)";
+                  e.currentTarget.style.transform = "translateX(1px)";
+                  e.currentTarget.style.background = "#FFFDF7";
+                }}
+                onMouseLeave={e => {
+                  e.currentTarget.style.boxShadow = "none";
+                  e.currentTarget.style.transform = "translateX(0)";
+                  e.currentTarget.style.background = C.card;
+                }}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{
+                    fontSize: 13.5,
+                    fontWeight: 600,
+                    color: C.tx,
+                    marginBottom: 4,
+                    lineHeight: 1.35,
+                    // Keep the text on one line — Tony scans titles, full text
+                    // is still available in the detail drawer.
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}>{idea.text}</div>
+                  <div style={{ display: "flex", gap: 5, alignItems: "center", flexWrap: "nowrap", overflow: "hidden" }}>
+                    <span style={{ fontSize: 9.5, fontWeight: 700, padding: "1.5px 7px", borderRadius: 3, background: catColor, color: "#fff", letterSpacing: 0.2 }}>{idea.category}</span>
+                    <span style={{ fontSize: 9.5, fontWeight: 700, padding: "1.5px 7px", borderRadius: 3, background: urgColor, color: "#fff", letterSpacing: 0.2 }}>{idea.urgency}</span>
+                    {idea.techType && <span style={{ fontSize: 9.5, fontWeight: 600, padding: "1.5px 7px", borderRadius: 3, background: "#E5E7EB", color: "#374151" }}>{idea.techType}</span>}
+                    {idea.status === "override" && <span style={{ fontSize: 9.5, fontWeight: 700, padding: "1.5px 7px", borderRadius: 3, background: "#FEE2E2", color: "#DC2626" }}>OVERRIDE</span>}
+                    {idea.status === "parked" && <span style={{ fontSize: 9.5, fontWeight: 600, padding: "1.5px 7px", borderRadius: 3, background: "#F3F4F6", color: "#6B7280" }}>parked</span>}
+                    {idea.linearIdentifier && <span style={{ fontSize: 9.5, fontWeight: 600, padding: "1.5px 7px", borderRadius: 3, background: "#EBF5FF", color: "#2563EB", fontFamily: "monospace" }}>{idea.linearIdentifier}</span>}
+                    {idea.assigneeName && <span style={{ fontSize: 10, color: C.mut, marginLeft: 4 }}>· {idea.assigneeName}</span>}
+                  </div>
+                </div>
+                <div title={createdTitle} style={{ fontSize: 11, color: C.mut, whiteSpace: "nowrap", flexShrink: 0 }}>
+                  {timeAgo(idea.createdAt)}
                 </div>
               </div>
-              <div style={{ fontSize: 11, color: C.mut, whiteSpace: "nowrap", marginLeft: 12 }}>
-                {idea.createdAt ? new Date(idea.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "America/Los_Angeles" }) : ""}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 

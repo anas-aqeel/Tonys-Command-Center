@@ -445,15 +445,14 @@ router.post("/ideas/notify-override", async (req, res): Promise<void> => {
     snapshotExtra: { ideaText: text, justification },
   }).catch(err => console.error("[ideas/notify-override] recordFeedback failed:", err));
 
+  // Single Slack post to #engineering. Ethan is a member of #engineering, so
+  // the channel post already reaches him — the previous extra DM to his user
+  // ID (U0991BD321Y) was a duplicate notification on his end. Removed.
   try {
     await postSlackMessage({
       channel: "C0A3CS15MPT",
       text: `*Priority Override Alert*\n\nTony overrode the 90-day plan to prioritize:\n> ${text || "Unknown idea"}\n\n*Justification:* ${justification || "No justification provided"}`,
     });
-    postSlackMessage({
-      channel: "U0991BD321Y",
-      text: `Tony overrode the plan. New priority: "${text || ""}". Justification: ${justification || "None"}`,
-    }).catch(() => {});
     res.json({ ok: true });
   } catch {
     res.json({ ok: true, slackFailed: true });
@@ -461,13 +460,36 @@ router.post("/ideas/notify-override", async (req, res): Promise<void> => {
 });
 
 router.post("/ideas/escalate-to-ethan", async (req, res): Promise<void> => {
-  const { text, rank, reasoning, meetingStart, meetingEnd } = req.body as {
+  const { text, rank, reasoning, meetingStart, meetingEnd, ideaId, category, urgency } = req.body as {
     text?: string;
     rank?: number;
     reasoning?: string;
     meetingStart?: string;
     meetingEnd?: string;
+    ideaId?: string;
+    category?: string;
+    urgency?: string;
   };
+
+  // B5-4: capture an escalate-feedback row so Coach can learn what Tony
+  // deems important enough to escalate. Fire-and-forget — do not block the
+  // notify/booking flow on a feedback write.
+  recordFeedback({
+    agent: "ideas",
+    skill: "classify",
+    sourceType: "escalate",
+    sourceId: ideaId || text || "unknown",
+    rating: null,
+    reviewText: reasoning || null,
+    snapshotExtra: {
+      ideaId: ideaId || null,
+      ideaText: text || null,
+      ideaCategory: category || null,
+      ideaUrgency: urgency || null,
+      reason: reasoning || null,
+      aiPriorityRank: rank ?? null,
+    },
+  }).catch(err => console.error("[ideas/escalate-to-ethan] recordFeedback failed:", err));
 
   let slackOk = false;
   let calendarOk = false;
@@ -808,6 +830,134 @@ router.delete("/ideas/:id", async (req, res): Promise<void> => {
     res.json({ ok: true, id: deleted.id });
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+// HTML-escape user-controlled strings before interpolating into an email
+// body. Covers the three chars that can break out of text context into
+// markup; intentionally narrow (no quotes) because we never interpolate
+// into attribute values.
+function escapeHtml(s: string): string {
+  return s.replace(/[<>&]/g, c => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c] || c));
+}
+
+// ─── Reflection summary helper — formats the persisted AI classification
+// JSON (Category / Urgency / Type / Priority / Reason / Business Fit) into
+// a concise multi-line string used by both the Slack DM and Resend email
+// payloads. Falls back to "no AI reflection on file yet" when the column
+// is empty or unparseable.
+function buildReflectionSummary(idea: typeof ideasTable.$inferSelect): string {
+  let parsed: Record<string, unknown> = {};
+  if (idea.aiReflection) {
+    try { parsed = JSON.parse(idea.aiReflection) as Record<string, unknown>; }
+    catch { /* fall through — emit a minimal summary */ }
+  }
+  const lines = [
+    `Idea: ${idea.text}`,
+    `Category: ${(parsed.category as string) || idea.category || "—"}`,
+    `Urgency: ${(parsed.urgency as string) || idea.urgency || "—"}`,
+    `Type: ${(parsed.techType as string) || idea.techType || "—"}`,
+    `Priority: ${(parsed.priority as string) || "—"}`,
+  ];
+  if (parsed.reason) lines.push(`Reason: ${parsed.reason}`);
+  if (parsed.businessFit) lines.push(`Business fit: ${parsed.businessFit}`);
+  return lines.join("\n");
+}
+
+// ─── POST /ideas/:id/notify-assignee-slack — DM the assignee with reflection ─
+// Looks up the assignee in team_roles (by name first, falling back to email)
+// and DMs their Slack ID with the persisted AI reflection summary. Returns
+// a structured 4xx body when the assignee or their Slack ID is missing so
+// the FE can surface a tooltip-friendly reason.
+router.post("/ideas/:id/notify-assignee-slack", async (req, res): Promise<void> => {
+  const { id } = req.params;
+  try {
+    const [idea] = await db.select().from(ideasTable).where(eq(ideasTable.id, id)).limit(1);
+    if (!idea) { res.status(404).json({ ok: false, error: "Idea not found" }); return; }
+    if (!idea.assigneeName && !idea.assigneeEmail) {
+      res.status(400).json({ ok: false, error: "no_assignee" });
+      return;
+    }
+
+    // Try team_roles match (canonical Slack ID). Match name first (exact),
+    // then email (case-insensitive). Fall back to a Slack workspace lookup
+    // by display-name/email so users not yet in team_roles still notify.
+    const roles = await db.select().from(teamRolesTable);
+    const byName = roles.find(r => idea.assigneeName && r.name.toLowerCase() === idea.assigneeName.toLowerCase());
+    const byEmail = idea.assigneeEmail
+      ? roles.find(r => r.email && r.email.toLowerCase() === idea.assigneeEmail!.toLowerCase())
+      : null;
+    let slackId = byName?.slackId || byEmail?.slackId || null;
+
+    if (!slackId) {
+      try {
+        const slackRes = await listSlackUsers();
+        const members = slackRes.members ?? [];
+        const matchEmail = idea.assigneeEmail?.toLowerCase();
+        const matchName = idea.assigneeName?.toLowerCase();
+        const su = members.find(m =>
+          (matchEmail && m.profile?.email?.toLowerCase() === matchEmail) ||
+          (matchName && (m.profile?.display_name?.toLowerCase() === matchName || m.real_name?.toLowerCase() === matchName))
+        );
+        slackId = su?.id || null;
+      } catch { /* slack lookup failed — fall through to error */ }
+    }
+
+    if (!slackId) {
+      res.status(400).json({ ok: false, error: "no_slack_id" });
+      return;
+    }
+
+    const summary = buildReflectionSummary(idea);
+    const slackText = `💡 *Idea reflection from Tony*\n\n${summary}`;
+    const r = await postSlackMessage({ channel: slackId, text: slackText });
+    if (!r.ok) {
+      res.status(502).json({ ok: false, error: r.error || "slack_failed" });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: (err as Error).message });
+  }
+});
+
+// ─── POST /ideas/:id/notify-assignee-email — Resend the assignee a reflection
+// Subject is "Idea reflection: <title>"; body is the persisted reflection
+// summary as plain-text-in-HTML (newlines preserved via <pre>).
+router.post("/ideas/:id/notify-assignee-email", async (req, res): Promise<void> => {
+  const { id } = req.params;
+  try {
+    const [idea] = await db.select().from(ideasTable).where(eq(ideasTable.id, id)).limit(1);
+    if (!idea) { res.status(404).json({ ok: false, error: "Idea not found" }); return; }
+    if (!idea.assigneeEmail) {
+      res.status(400).json({ ok: false, error: "no_email" });
+      return;
+    }
+
+    const summary = buildReflectionSummary(idea);
+    const titleSnippet = idea.text.substring(0, 60) + (idea.text.length > 60 ? "..." : "");
+    // Subject is a plain-text email header (no HTML rendering), so titleSnippet
+    // does not need HTML escaping here.
+    const subject = `Idea reflection: ${titleSnippet}`;
+    // Both assigneeName and summary are user/AI-controlled strings rendered
+    // into HTML — escape them to prevent markup injection (e.g. an assignee
+    // name like `<img src=x onerror=...>` would otherwise fire in the client).
+    const safeName = escapeHtml(idea.assigneeName || "there");
+    const safeSummary = escapeHtml(summary);
+    const body = `<p>Hi ${safeName},</p>
+<p>Tony shared an AI reflection on this idea:</p>
+<pre style="background:#F9FAFB;padding:12px;border-radius:6px;font-family:monospace;white-space:pre-wrap;">${safeSummary}</pre>
+<p>— FlipIQ Command Center</p>`;
+
+    const { sendSystemEmail } = await import("../../lib/agentmail");
+    const r = await sendSystemEmail({ to: idea.assigneeEmail, subject, body });
+    if (!r.ok) {
+      res.status(502).json({ ok: false, error: "email_failed" });
+      return;
+    }
+    res.json({ ok: true, messageId: r.messageId });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: (err as Error).message });
   }
 });
 

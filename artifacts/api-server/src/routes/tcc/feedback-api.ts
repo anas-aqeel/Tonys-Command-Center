@@ -12,7 +12,7 @@ const router: IRouter = Router();
 const FeedbackBody = z.object({
   agent: z.string().min(1),
   skill: z.string().min(1),
-  source_type: z.enum(["thumbs", "reorder", "override", "correction", "rating", "free_text"]),
+  source_type: z.enum(["thumbs", "reorder", "override", "correction", "rating", "free_text", "escalate"]),
   source_id: z.string().min(1),
   rating: z.union([z.literal(1), z.literal(-1), z.null()]).optional(),
   review_text: z.string().nullable().optional(),

@@ -236,8 +236,13 @@ export function IdeasModal({ open, onClose, onSave, onCreateTask, count }: Props
         }
       }
 
-      // For "Now" urgency, also email Ethan
-      if (finalUrg === "Now") {
+      // For "Now" urgency, email Ethan ONLY when the normal-park Slack DM
+      // path won't already DM him below. Without this guard, non-Tech "Now"
+      // ideas were notifying Ethan twice (Slack DM + email). Tech "Now"
+      // ideas don't go through notify-park (they post to #tech-ideas
+      // instead) so Ethan still needs the email there.
+      const willSlackDmEthan = !pushback && finalCat !== "Tech";
+      if (finalUrg === "Now" && !willSlackDmEthan) {
         post("/ideas/notify-assignee", {
           ideaText: text, category: finalCat, urgency: finalUrg,
           dueDate: new Date().toISOString().split("T")[0],
@@ -396,12 +401,18 @@ export function IdeasModal({ open, onClose, onSave, onCreateTask, count }: Props
                       const endDate = new Date(startDate.getTime() + 30 * 60 * 1000);
 
                       // Always notify Ethan when this button is clicked (matches the label).
+                      // Pass ideaId/category/urgency so the backend can record an
+                      // 'escalate' feedback row (B5-4) with full snapshot context.
                       type EscalateRes = { ok: boolean; meetingStart?: string; meetingEnd?: string; calendarOk?: boolean; slackOk?: boolean };
                       const r: EscalateRes = await post<EscalateRes>("/ideas/escalate-to-ethan", {
                         text,
                         rank: pushback.priorityRank,
                         meetingStart: startDate.toISOString(),
                         meetingEnd: endDate.toISOString(),
+                        ideaId: idea.id,
+                        category: finalCat,
+                        urgency: finalUrg,
+                        reasoning: pushback.message || null,
                       }).catch(() => ({ ok: false }));
 
                       // Confirmation string for the saving step UX.

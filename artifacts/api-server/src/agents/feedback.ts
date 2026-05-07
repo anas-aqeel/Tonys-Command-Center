@@ -22,7 +22,8 @@ export type FeedbackSourceType =
   | "override"   // forced bypass (priority warning, scope block)
   | "correction" // edit-after-AI (compose modal notes, OCR field fix)
   | "rating"     // 1-5 stars (future)
-  | "free_text"; // standalone review
+  | "free_text"  // standalone review
+  | "escalate";  // human escalation (e.g. ideas → Ethan) — Coach learns what's important enough to bump up the chain
 
 export interface RecordFeedbackInput {
   agent: string;                       // 'email' | 'tasks' | ...
