@@ -1907,8 +1907,13 @@ function MasterTaskTab({ onRefreshAll, categories, initialParentFilter, onInitia
     const updates = organizePreview.newOrder.map((t, i) => ({ id: t.id, priorityOrder: i }));
     try {
       await post("/plan/reorder", { items: updates });
-      setTasks(organizePreview.newOrder);
+      // Refetch the full task list rather than replacing local state with the
+      // AI-organize response. /plan/brain/order only returns status="active"
+      // tasks, but local state holds ALL level="task" rows (including done /
+      // not_started / in_qa). Replacing state would silently drop everything
+      // that isn't currently active.
       setOrganizePreview(null);
+      await loadTasks(true);
     } catch { loadTasks(); }
     setConfirmingOrganize(false);
   }
