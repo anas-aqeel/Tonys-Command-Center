@@ -47,13 +47,23 @@ const STATUS_BG: Record<string, string> = {
   Hot: "#FEE2E2", Warm: "#FEF3C7", Cold: "#DBEAFE", New: "#F1F5F9",
 };
 
-const ACTION_PILL: React.CSSProperties = {
-  display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6,
-  padding: "7px 10px", borderRadius: 8, border: "1px solid transparent",
-  fontSize: 11, fontWeight: 600, fontFamily: F, cursor: "pointer",
+// Icon-first action button: 32x32 square with tooltip. Connected gets text alongside.
+const ICON_BTN: React.CSSProperties = {
+  display: "inline-flex", alignItems: "center", justifyContent: "center",
+  width: 30, height: 30, borderRadius: 7,
+  border: "1px solid transparent",
+  fontSize: 14, fontFamily: F, cursor: "pointer",
+  transition: "background 0.12s, border-color 0.12s, transform 0.08s",
+  textDecoration: "none", padding: 0, lineHeight: 1,
+};
+
+const CONNECTED_BTN: React.CSSProperties = {
+  display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5,
+  height: 30, padding: "0 10px", borderRadius: 7,
+  border: "1px solid transparent",
+  fontSize: 11, fontWeight: 700, fontFamily: F, cursor: "pointer",
   transition: "background 0.12s, border-color 0.12s",
-  textDecoration: "none", whiteSpace: "nowrap",
-  minWidth: 0, flex: "1 1 0",
+  whiteSpace: "nowrap", marginLeft: "auto",
 };
 
 export function SalesView({ contacts: initialContacts, calls, calSide, onAttempt, onConnected, onSwitchToTasks, onBackToSchedule, onCompose, onConnectedCall }: Props) {
@@ -72,8 +82,6 @@ export function SalesView({ contacts: initialContacts, calls, calSide, onAttempt
   const [loadingMore, setLoadingMore] = useState(false);
   const [noMoreResults, setNoMoreResults] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [syncing, setSyncing] = useState<"" | "db">("");
-  const [syncToast, setSyncToast] = useState<string | null>(null);
   const [briefModal, setBriefModal] = useState<BriefModalData | null>(null);
   const [briefLoading, setBriefLoading] = useState<string | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
@@ -194,20 +202,6 @@ export function SalesView({ contacts: initialContacts, calls, calSide, onAttempt
       setChatSending(false);
     }
   }, [chatInput, chatMessages, chatSending, briefModal]);
-
-  const handlePushToSheets = useCallback(async () => {
-    setSyncing("db");
-    setSyncToast("Pushing contacts to Google Sheets…");
-    try {
-      await post<{ ok: boolean; synced: string[] }>("/sheets/sync-master");
-      setSyncToast("✓ Pushed to Google Sheets");
-    } catch (err) {
-      setSyncToast(`✕ Push failed: ${(err as Error).message}`);
-    } finally {
-      setSyncing("");
-      setTimeout(() => setSyncToast(null), 3500);
-    }
-  }, []);
 
   const overdue = results.filter(c => c.followUpDate && isOverdue(c.followUpDate)).length;
 
@@ -350,12 +344,6 @@ export function SalesView({ contacts: initialContacts, calls, calSide, onAttempt
         </div>
       )}
 
-      {syncToast && (
-        <div style={{ position: "fixed", bottom: 20, right: 20, background: syncToast.startsWith("✕") ? C.redBg : syncToast.startsWith("✓") ? "#DCFCE7" : "#FFF7ED", color: syncToast.startsWith("✕") ? C.red : syncToast.startsWith("✓") ? "#065F46" : "#9A3412", padding: "10px 16px", borderRadius: 10, fontSize: 13, fontWeight: 600, fontFamily: F, zIndex: 9999, boxShadow: "0 4px 16px rgba(0,0,0,0.15)" }}>
-          {syncToast}
-        </div>
-      )}
-
       <div style={{ padding: "16px 20px 40px", marginRight: calSide ? 320 : undefined, transition: "margin 0.2s" }}>
 
         {/* ── Header ── */}
@@ -378,14 +366,6 @@ export function SalesView({ contacts: initialContacts, calls, calSide, onAttempt
                   ⚠ {overdue} overdue
                 </span>
               )}
-              <button
-                onClick={handlePushToSheets}
-                disabled={!!syncing}
-                title="Push contacts to Google Sheets"
-                style={{ padding: "6px 12px", background: "#FAFAF8", color: C.sub, border: `1px solid ${C.brd}`, borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: syncing ? "wait" : "pointer", fontFamily: F, opacity: syncing ? 0.6 : 1 }}
-              >
-                {syncing === "db" ? "↑ Pushing…" : "↑ Sheets"}
-              </button>
               <button
                 onClick={() => setShowAddContact(true)}
                 style={{ padding: "6px 16px", background: C.tx, color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: F }}
@@ -484,85 +464,138 @@ export function SalesView({ contacts: initialContacts, calls, calSide, onAttempt
             {results.map(c => {
               const od = isOverdue(c.followUpDate);
               const statusColor = SC[c.status || "New"] || C.mut;
+              const statusBg = STATUS_BG[c.status || "New"] || "#F1F5F9";
               const initials = c.name.split(" ").filter(Boolean).map((n: string) => n[0]).slice(0, 2).join("").toUpperCase();
+              const isLoadingBrief = briefLoading === String(c.id);
+
+              // Last interaction: follow-up takes precedence (it's actionable), otherwise lastContactDate
+              const interactionLabel = c.followUpDate
+                ? (od ? "Overdue" : "Follow-up")
+                : c.lastContactDate ? "Last contact" : null;
+              const interactionDate = c.followUpDate || c.lastContactDate;
 
               return (
                 <div
                   key={c.id}
                   style={{
+                    position: "relative",
                     display: "flex", flexDirection: "column",
-                    background: "#fff", borderRadius: 12,
+                    background: "#fff", borderRadius: 10,
                     border: `1px solid ${C.brd}`,
-                    borderTop: `4px solid ${statusColor}`,
                     overflow: "hidden",
-                    boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
-                    transition: "box-shadow 0.15s, transform 0.15s",
+                    boxShadow: "0 1px 2px rgba(16,24,40,0.04)",
+                    transition: "box-shadow 0.15s, border-color 0.15s, transform 0.15s",
                   }}
-                  onMouseEnter={e => { e.currentTarget.style.boxShadow = "0 6px 18px rgba(0,0,0,0.10)"; e.currentTarget.style.transform = "translateY(-1px)"; }}
-                  onMouseLeave={e => { e.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,0.04)"; e.currentTarget.style.transform = "translateY(0)"; }}
+                  onMouseEnter={e => { e.currentTarget.style.boxShadow = "0 8px 24px rgba(16,24,40,0.10)"; e.currentTarget.style.borderColor = "#D1D5DB"; e.currentTarget.style.transform = "translateY(-1px)"; }}
+                  onMouseLeave={e => { e.currentTarget.style.boxShadow = "0 1px 2px rgba(16,24,40,0.04)"; e.currentTarget.style.borderColor = C.brd; e.currentTarget.style.transform = "translateY(0)"; }}
                 >
-                  {/* Header: Avatar + Name + Status */}
+                  {/* Subtle left accent stripe (replaces heavy 4px top border) */}
+                  <div style={{
+                    position: "absolute", left: 0, top: 0, bottom: 0, width: 3,
+                    background: statusColor, opacity: 0.85,
+                  }} />
+
+                  {/* Header: Avatar + Name/Company + Status pill (top-right) */}
                   <div
                     onClick={() => setSelectedContactId(String(c.id))}
-                    style={{ display: "flex", gap: 12, padding: "14px 14px 8px", cursor: "pointer", alignItems: "center" }}
+                    style={{ display: "flex", gap: 11, padding: "13px 14px 6px 16px", cursor: "pointer", alignItems: "flex-start" }}
                   >
                     <div style={{
-                      width: 44, height: 44, borderRadius: "50%",
-                      background: statusColor, flexShrink: 0,
+                      width: 40, height: 40, borderRadius: "50%",
+                      background: statusBg, flexShrink: 0,
                       display: "flex", alignItems: "center", justifyContent: "center",
-                      fontSize: 14, fontWeight: 800, color: "#fff",
-                      letterSpacing: -0.5, userSelect: "none",
+                      fontSize: 13, fontWeight: 700, color: statusColor,
+                      letterSpacing: -0.3, userSelect: "none",
+                      border: `1.5px solid ${statusColor}40`,
                     }}>{initials}</div>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 14, fontWeight: 700, color: C.tx, letterSpacing: -0.1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</div>
-                      {c.company && <div style={{ fontSize: 12, color: C.sub, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.company}</div>}
-                    </div>
-                  </div>
-
-                  {/* Badges */}
-                  <div onClick={() => setSelectedContactId(String(c.id))} style={{ display: "flex", gap: 5, flexWrap: "wrap", padding: "0 14px 8px", cursor: "pointer" }}>
-                    <span style={{
-                      fontSize: 10, fontWeight: 700, color: statusColor,
-                      background: STATUS_BG[c.status || "New"] || "#F1F5F9",
-                      padding: "2px 7px", borderRadius: 10, letterSpacing: 0.3,
-                    }}>{c.status || "New"}</span>
-                    {c.pipelineStage && (
-                      <span style={{ fontSize: 10, color: "#6B5FF8", background: "#F5F3FF", padding: "2px 6px", borderRadius: 5, fontWeight: 500 }}>{c.pipelineStage}</span>
-                    )}
-                    {c.type && (
-                      <span style={{ fontSize: 10, color: C.sub, background: "#F3F4F6", padding: "2px 6px", borderRadius: 5 }}>{c.type}</span>
-                    )}
-                  </div>
-
-                  {/* Body: next step + meta */}
-                  <div onClick={() => setSelectedContactId(String(c.id))} style={{ flex: 1, padding: "0 14px 10px", cursor: "pointer", minHeight: 36 }}>
-                    {c.nextStep && (
-                      <div style={{ fontSize: 12, color: C.tx, lineHeight: 1.4, marginBottom: 6 }}>
-                        → {c.nextStep.length > 80 ? c.nextStep.slice(0, 80) + "…" : c.nextStep}
-                      </div>
-                    )}
-                    <div style={{ fontSize: 11, color: C.mut, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                      {c.followUpDate && (
-                        <span style={{ color: od ? C.red : C.mut, fontWeight: od ? 700 : 400 }}>
-                          {od ? "⚠ Overdue" : "📅"} {c.followUpDate}
-                        </span>
+                      <div style={{
+                        fontSize: 15, fontWeight: 700, color: C.tx,
+                        letterSpacing: -0.2, lineHeight: 1.25,
+                        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                      }}>{c.name}</div>
+                      {c.company && (
+                        <div style={{
+                          fontSize: 12, color: C.sub, fontWeight: 500,
+                          marginTop: 1, lineHeight: 1.3,
+                          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                        }}>{c.company}</div>
                       )}
-                      {!c.followUpDate && c.lastContactDate && <span>Last: {c.lastContactDate}</span>}
-                      {c.phone && <span style={{ fontVariantNumeric: "tabular-nums" }}>{c.phone}</span>}
                     </div>
+                    <span style={{
+                      fontSize: 9.5, fontWeight: 800, color: statusColor,
+                      background: statusBg,
+                      padding: "3px 8px", borderRadius: 999,
+                      letterSpacing: 0.5, textTransform: "uppercase",
+                      flexShrink: 0, lineHeight: 1.4,
+                    }}>{c.status || "New"}</span>
+                  </div>
+
+                  {/* Meta line: stage · type — light, single inline row */}
+                  {(c.pipelineStage || c.type) && (
+                    <div
+                      onClick={() => setSelectedContactId(String(c.id))}
+                      style={{
+                        padding: "0 14px 8px 16px", cursor: "pointer",
+                        fontSize: 11, color: C.mut, fontWeight: 500,
+                        display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap",
+                      }}
+                    >
+                      {c.pipelineStage && (
+                        <span style={{ color: "#6B5FF8", fontWeight: 600 }}>{c.pipelineStage}</span>
+                      )}
+                      {c.pipelineStage && c.type && <span style={{ color: C.brd }}>·</span>}
+                      {c.type && <span>{c.type}</span>}
+                    </div>
+                  )}
+
+                  {/* Body: next step + last interaction (prominent) */}
+                  <div onClick={() => setSelectedContactId(String(c.id))} style={{ flex: 1, padding: "0 14px 10px 16px", cursor: "pointer", minHeight: 30 }}>
+                    {c.nextStep && (
+                      <div style={{
+                        fontSize: 12.5, color: C.tx, lineHeight: 1.45,
+                        marginBottom: 8,
+                        display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
+                        overflow: "hidden",
+                      }}>
+                        <span style={{ color: C.mut, marginRight: 4 }}>→</span>
+                        {c.nextStep}
+                      </div>
+                    )}
+                    {/* Interaction row — prominent, dedicated */}
+                    {interactionDate && (
+                      <div style={{
+                        display: "inline-flex", alignItems: "center", gap: 6,
+                        fontSize: 11.5,
+                        color: od ? C.red : C.sub,
+                        fontWeight: od ? 700 : 600,
+                        background: od ? C.redBg : "#F9FAFB",
+                        border: `1px solid ${od ? "#FECACA" : C.brd}`,
+                        padding: "3px 9px", borderRadius: 6,
+                      }}>
+                        <span style={{ fontSize: 10 }}>{od ? "⚠" : interactionLabel === "Follow-up" ? "📅" : "🕒"}</span>
+                        <span style={{ letterSpacing: 0.1 }}>{interactionLabel}: {interactionDate}</span>
+                      </div>
+                    )}
                     {c.painPoints && (
-                      <div style={{ fontSize: 11, color: C.red, fontStyle: "italic", marginTop: 4 }}>
-                        ⚠ {c.painPoints.length > 70 ? c.painPoints.slice(0, 70) + "…" : c.painPoints}
+                      <div style={{
+                        fontSize: 11, color: C.amb, marginTop: 6,
+                        display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
+                        overflow: "hidden", lineHeight: 1.4,
+                      }}>
+                        <span style={{ marginRight: 3 }}>⚡</span>
+                        {c.painPoints}
                       </div>
                     )}
                   </div>
 
-                  {/* Action buttons (icon + text, wraps onto two rows) */}
+                  {/* Action bar: icon-only buttons + prominent Connected CTA */}
                   <div
                     style={{
-                      display: "flex", flexWrap: "wrap", gap: 5,
-                      padding: "10px 12px", borderTop: `1px solid ${C.brd}`,
-                      background: "#FAFAF8",
+                      display: "flex", alignItems: "center", gap: 5,
+                      padding: "8px 12px 8px 16px",
+                      borderTop: `1px solid ${C.brd}`,
+                      background: "#FAFAFB",
                     }}
                     onClick={e => e.stopPropagation()}
                   >
@@ -570,72 +603,61 @@ export function SalesView({ contacts: initialContacts, calls, calSide, onAttempt
                       <a
                         href={`tel:${c.phone}`}
                         onClick={() => onAttempt({ id: c.id, name: c.name })}
-                        title="Call"
-                        style={{ ...ACTION_PILL, background: "#F0FDF4", color: C.grn, borderColor: "#BBF7D0" }}
-                        onMouseEnter={e => (e.currentTarget.style.background = "#DCFCE7")}
-                        onMouseLeave={e => (e.currentTarget.style.background = "#F0FDF4")}
-                      >
-                        <span>📞</span><span>Call</span>
-                      </a>
+                        title={`Call ${c.phone}`}
+                        style={{ ...ICON_BTN, background: "transparent", color: C.grn }}
+                        onMouseEnter={e => { e.currentTarget.style.background = "#F0FDF4"; e.currentTarget.style.borderColor = "#BBF7D0"; }}
+                        onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.borderColor = "transparent"; }}
+                      >📞</a>
                     )}
                     {c.phone && (
                       <button
                         onClick={() => setSmsContact(c)}
-                        title="Text"
-                        style={{ ...ACTION_PILL, background: "#EFF6FF", color: C.blu, borderColor: "#BFDBFE" }}
-                        onMouseEnter={e => (e.currentTarget.style.background = "#DBEAFE")}
-                        onMouseLeave={e => (e.currentTarget.style.background = "#EFF6FF")}
-                      >
-                        <span>💬</span><span>Text</span>
-                      </button>
+                        title="Send text message"
+                        style={{ ...ICON_BTN, background: "transparent", color: C.blu }}
+                        onMouseEnter={e => { e.currentTarget.style.background = "#EFF6FF"; e.currentTarget.style.borderColor = "#BFDBFE"; }}
+                        onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.borderColor = "transparent"; }}
+                      >💬</button>
                     )}
                     {onCompose && (
                       <button
                         onClick={() => onCompose(c)}
-                        title="Email"
-                        style={{ ...ACTION_PILL, background: "#EFF6FF", color: C.blu, borderColor: "#BFDBFE" }}
-                        onMouseEnter={e => (e.currentTarget.style.background = "#DBEAFE")}
-                        onMouseLeave={e => (e.currentTarget.style.background = "#EFF6FF")}
-                      >
-                        <span>✉️</span><span>Email</span>
-                      </button>
+                        title="Compose email"
+                        style={{ ...ICON_BTN, background: "transparent", color: C.blu }}
+                        onMouseEnter={e => { e.currentTarget.style.background = "#EFF6FF"; e.currentTarget.style.borderColor = "#BFDBFE"; }}
+                        onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.borderColor = "transparent"; }}
+                      >✉️</button>
                     )}
                     <button
                       onClick={() => handleGetBrief(c)}
-                      disabled={briefLoading === String(c.id)}
-                      title="Pre-call brief"
+                      disabled={isLoadingBrief}
+                      title={isLoadingBrief ? "Loading brief…" : "Pre-call brief"}
                       style={{
-                        ...ACTION_PILL,
-                        background: "#F5F3FF", color: "#6B5FF8", borderColor: "#DDD6FE",
-                        opacity: briefLoading === String(c.id) ? 0.5 : 1,
-                        cursor: briefLoading === String(c.id) ? "wait" : "pointer",
+                        ...ICON_BTN, background: "transparent", color: "#6B5FF8",
+                        opacity: isLoadingBrief ? 0.5 : 1,
+                        cursor: isLoadingBrief ? "wait" : "pointer",
                       }}
-                      onMouseEnter={e => { if (briefLoading !== String(c.id)) e.currentTarget.style.background = "#EDE9FE"; }}
-                      onMouseLeave={e => (e.currentTarget.style.background = "#F5F3FF")}
-                    >
-                      <span>{briefLoading === String(c.id) ? "⌛" : "📋"}</span>
-                      <span>{briefLoading === String(c.id) ? "Loading…" : "Brief"}</span>
-                    </button>
+                      onMouseEnter={e => { if (!isLoadingBrief) { e.currentTarget.style.background = "#F5F3FF"; e.currentTarget.style.borderColor = "#DDD6FE"; } }}
+                      onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.borderColor = "transparent"; }}
+                    >{isLoadingBrief ? "⌛" : "📋"}</button>
                     <button
                       onClick={() => onAttempt({ id: c.id, name: c.name })}
                       title={TIPS.attempt}
-                      style={{ ...ACTION_PILL, background: "#FFFBEB", color: "#B45309", borderColor: "#FDE68A" }}
-                      onMouseEnter={e => (e.currentTarget.style.background = "#FEF3C7")}
-                      onMouseLeave={e => (e.currentTarget.style.background = "#FFFBEB")}
-                    >
-                      <span>📝</span><span>Attempt</span>
-                    </button>
+                      style={{ ...ICON_BTN, background: "transparent", color: "#B45309" }}
+                      onMouseEnter={e => { e.currentTarget.style.background = "#FFFBEB"; e.currentTarget.style.borderColor = "#FDE68A"; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.borderColor = "transparent"; }}
+                    >📝</button>
                     <button
                       onClick={() => onConnectedCall
                         ? onConnectedCall({ contactId: String(c.id), contactName: c.name, contactEmail: c.email || undefined })
                         : onConnected(c.name)
                       }
                       title="Log connected call"
-                      style={{ ...ACTION_PILL, background: "#F0FDF4", color: C.grn, borderColor: "#BBF7D0", fontWeight: 700 }}
-                      onMouseEnter={e => (e.currentTarget.style.background = "#DCFCE7")}
-                      onMouseLeave={e => (e.currentTarget.style.background = "#F0FDF4")}
+                      style={{ ...CONNECTED_BTN, background: C.grn, color: "#fff", borderColor: C.grn }}
+                      onMouseEnter={e => { e.currentTarget.style.background = "#1B5E20"; e.currentTarget.style.borderColor = "#1B5E20"; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = C.grn; e.currentTarget.style.borderColor = C.grn; }}
                     >
-                      <span>✓</span><span>Connected</span>
+                      <span style={{ fontSize: 12 }}>✓</span>
+                      <span>Connected</span>
                     </button>
                   </div>
                 </div>
