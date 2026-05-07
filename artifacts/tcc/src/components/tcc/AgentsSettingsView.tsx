@@ -1013,18 +1013,68 @@ function SkillRow({
     setApiKeyDraft("");
   }, [skill.modelOverride, skill.providerOverride, skill.baseUrl, skill.apiKeyConfigured]);
 
-  // Live model catalog for the chosen provider — feeds the model combobox
-  // (mirrors ModelSettingsView). Falls back gracefully if the route is
-  // unreachable (skill row still works without suggestions).
+  // Live model catalog (DB) + curated suggestions (fallback) for the chosen
+  // provider — feeds the model combobox. Mirrors ModelSettingsView so the
+  // dropdown is never empty: even if no sync has run, the curated list is
+  // always available. Without this fallback the input behaved like a plain
+  // text box (Chrome's password autofill would hijack the dropdown).
   const [catalog, setCatalog] = useState<CatalogModelRow[]>([]);
+  const [suggestions, setSuggestions] = useState<Array<{ id: string; name: string }>>([]);
+  const [refreshingCatalog, setRefreshingCatalog] = useState(false);
+  const [refreshMsg, setRefreshMsg] = useState<string | null>(null);
+
+  const loadSkillCatalog = async () => {
+    if (!providerDraft) { setCatalog([]); return; }
+    try {
+      const rs = await get<CatalogModelRow[]>(`/ai-settings/models?provider=${providerDraft}`);
+      setCatalog(rs);
+    } catch { setCatalog([]); }
+  };
+
   useEffect(() => {
-    if (!expanded || !providerDraft) { setCatalog([]); return; }
+    if (!expanded || !providerDraft) { setCatalog([]); setSuggestions([]); return; }
     let cancelled = false;
-    get<CatalogModelRow[]>(`/ai-settings/models?provider=${providerDraft}`)
-      .then((rs) => { if (!cancelled) setCatalog(rs); })
-      .catch(() => { if (!cancelled) setCatalog([]); });
+    void loadSkillCatalog();
+    get<{ suggestions: Array<{ id: string; name: string }> }>(`/ai-settings/models/${providerDraft}`)
+      .then((d) => { if (!cancelled) setSuggestions(d.suggestions ?? []); })
+      .catch(() => { if (!cancelled) setSuggestions([]); });
     return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expanded, providerDraft]);
+
+  // Combined dropdown options: catalog first (live), curated fallback after,
+  // de-duped by model id. Same shape ModelSettingsView uses.
+  const datalistOptions = (() => {
+    const seen = new Set<string>();
+    const out: Array<{ id: string; label: string }> = [];
+    for (const r of catalog) {
+      if (seen.has(r.modelId)) continue;
+      seen.add(r.modelId);
+      out.push({ id: r.modelId, label: r.displayName ?? r.modelId });
+    }
+    for (const s of suggestions) {
+      if (seen.has(s.id)) continue;
+      seen.add(s.id);
+      out.push({ id: s.id, label: s.name });
+    }
+    return out;
+  })();
+
+  const onRefreshSkillCatalog = async () => {
+    if (!providerDraft) return;
+    setRefreshingCatalog(true);
+    setRefreshMsg(null);
+    try {
+      await post(`/ai-settings/sync-models`, { provider: providerDraft });
+      await loadSkillCatalog();
+      setRefreshMsg("Refreshed.");
+      setTimeout(() => setRefreshMsg(null), 2500);
+    } catch (err) {
+      setRefreshMsg(err instanceof Error ? err.message.slice(0, 100) : "Refresh failed");
+    } finally {
+      setRefreshingCatalog(false);
+    }
+  };
 
   const onTest = async () => {
     if (!providerDraft) {
@@ -1183,20 +1233,44 @@ function SkillRow({
             <div>
               <label style={lbl}>Model override</label>
               <input
-                list={`skill-models-${skill.skillName}`}
+                list={`skill-models-${skill.agent}-${skill.skillName}`}
                 value={modelDraft}
                 onChange={(e) => setModelDraft(e.target.value)}
                 placeholder="e.g. gpt-4o-mini (blank = inherit tier model)"
                 spellCheck={false}
+                autoComplete="off"
+                name={`skill-model-override-${skill.agent}-${skill.skillName}`}
                 style={inp}
               />
-              <datalist id={`skill-models-${skill.skillName}`}>
-                {catalog.map((r) => (
-                  <option key={r.modelId} value={r.modelId}>
-                    {r.displayName ?? r.modelId}
-                  </option>
+              <datalist id={`skill-models-${skill.agent}-${skill.skillName}`}>
+                {datalistOptions.map((o) => (
+                  <option key={o.id} value={o.id}>{o.label}</option>
                 ))}
               </datalist>
+              <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={onRefreshSkillCatalog}
+                  disabled={refreshingCatalog || !providerDraft}
+                  style={{
+                    padding: "4px 10px", border: `1px solid ${C.brd}`, background: C.card,
+                    borderRadius: 6, cursor: refreshingCatalog || !providerDraft ? "default" : "pointer",
+                    fontSize: 11, color: C.sub,
+                  }}
+                  title="Pull the live model list from the provider into model_catalog."
+                >
+                  {refreshingCatalog ? "Refreshing…" : "↻ Refresh models"}
+                </button>
+                <span style={{ fontSize: 10, color: C.mut }}>
+                  {refreshMsg
+                    ? refreshMsg
+                    : datalistOptions.length > 0
+                      ? `${datalistOptions.length} models`
+                      : providerDraft
+                        ? "No models — click Refresh"
+                        : "Pick a provider"}
+                </span>
+              </div>
             </div>
             <div style={{ gridColumn: "1 / -1" }}>
               <label style={lbl}>
