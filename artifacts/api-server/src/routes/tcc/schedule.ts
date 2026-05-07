@@ -250,24 +250,29 @@ router.post("/schedule/add", async (req, res): Promise<void> => {
   // New universal feedback capture — runs whenever Tony force-overrides
   // either the guilt-trip OR the scope-gatekeeper. The reason field (added
   // to AddEventBody) carries Tony's explanation when the FE supplies it.
+  // Awaited so the FE Train-now toast can deep-link to this exact row.
+  let feedbackId: string | undefined;
   if (forceOverride) {
-    recordFeedback({
-      agent: "schedule",
-      skill: "check-scope",
-      sourceType: "override",
-      sourceId: gcalResult.eventId || `${date}T${startTime || ""}`,
-      reviewText: overrideReason || guiltTripMsg || scopeWarning || null,
-      snapshotExtra: {
-        title, date, startTime,
-        scope: scopeCategory,
-        scopeWarning,
-        callsMade,
-        quotaTarget: CALL_QUOTA,
-      },
-    }).catch(err => console.error("[schedule/add] recordFeedback failed:", err));
+    try {
+      const fb = await recordFeedback({
+        agent: "schedule",
+        skill: "check-scope",
+        sourceType: "override",
+        sourceId: gcalResult.eventId || `${date}T${startTime || ""}`,
+        reviewText: overrideReason || guiltTripMsg || scopeWarning || null,
+        snapshotExtra: {
+          title, date, startTime,
+          scope: scopeCategory,
+          scopeWarning,
+          callsMade,
+          quotaTarget: CALL_QUOTA,
+        },
+      });
+      feedbackId = fb.feedbackId;
+    } catch (err) { console.error("[schedule/add] recordFeedback failed:", err); }
   }
 
-  res.json({ ok: true, eventId: gcalResult.eventId, htmlLink: gcalResult.htmlLink });
+  res.json({ ok: true, eventId: gcalResult.eventId, htmlLink: gcalResult.htmlLink, feedback_id: feedbackId });
 });
 
 export default router;

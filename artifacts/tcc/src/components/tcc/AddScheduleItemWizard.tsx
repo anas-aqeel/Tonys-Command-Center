@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback, type KeyboardEvent } from "re
 import { C, F, FS, inp, lbl, btn1, btn2 } from "./constants";
 import { post, get } from "../../lib/api";
 import { showToast } from "./Toast";
+import { showTrainNowToast } from "@/lib/trainNowToast";
 
 interface Props {
   onClose: () => void;
@@ -168,7 +169,7 @@ export function AddScheduleItemWizard({ onClose, onSaved }: Props) {
     }
     setSaving(true);
     try {
-      const result = await post<{ ok: boolean; guiltTrip?: boolean; guiltTripMsg?: string; callsMade?: number; quotaTarget?: number; htmlLink?: string }>("/schedule/add", {
+      const result = await post<{ ok: boolean; guiltTrip?: boolean; guiltTripMsg?: string; callsMade?: number; quotaTarget?: number; htmlLink?: string; eventId?: string; feedback_id?: string }>("/schedule/add", {
         title,
         date,
         allDay,
@@ -210,7 +211,21 @@ export function AddScheduleItemWizard({ onClose, onSaved }: Props) {
       const whenLabel = allDay
         ? new Date(date + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })
         : `${new Date(date + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })} · ${startTime}`;
-      showToast({ title: "Event created", description: `${title} — ${whenLabel}` });
+
+      // If Tony forced past the guilt-trip / scope check, that's exactly the
+      // signal Coach wants to learn from — backend wrote a feedback row.
+      // Surface the Train-now toast pointing at it. Otherwise, normal toast.
+      if (forceOverride) {
+        showTrainNowToast({
+          agent: "schedule",
+          feedbackId: result.feedback_id ?? null,
+          sourceId: result.eventId ?? null,
+          title: "Event created (override logged)",
+          description: `${title} — ${whenLabel} · Train the schedule agent on this override?`,
+        });
+      } else {
+        showToast({ title: "Event created", description: `${title} — ${whenLabel}` });
+      }
 
       onSaved();
       onClose();
