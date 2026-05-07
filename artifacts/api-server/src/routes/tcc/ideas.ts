@@ -256,14 +256,19 @@ router.post("/ideas/classify", async (req, res): Promise<void> => {
   try {
     classification = await classifyIdea(text, recentIdeas);
   } catch (err) {
+    // Surface the actual failure cause back to the FE so a fallback isn't a
+    // black box. Truncate to 180 chars so the toast/badge stays readable.
+    // Also logs the full error server-side for grepping in Vercel logs.
+    const msg = err instanceof Error ? err.message : String(err);
     req.log.warn({ err }, "Idea classification failed");
+    console.error("[ideas/classify] AI error:", msg);
     res.json({
       ok: true,
       classification: {
         category: "Operations",
         urgency: "This Week",
         techType: null,
-        reason: "Could not auto-classify — defaulting to Operations.",
+        reason: `AI classify failed (defaulting to Operations) — ${msg.slice(0, 180)}`,
         businessFit: "Review manually.",
         priority: "medium",
         pushback: null,
