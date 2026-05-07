@@ -189,10 +189,12 @@ export default function App() {
   const reclassifyEmailsNow = useCallback(async () => {
     if (reclassifying) return;
     setReclassifying(true);
+    // Clear banner state EAGERLY so the user sees immediate feedback.
+    // If loadEmails fails, the next pollEmailStatus tick will repopulate.
+    setNewEmailCount(0);
+    setPendingNewEmails([]);
     try {
       await loadEmails(true);
-      setNewEmailCount(0);
-      setPendingNewEmails([]);
     } finally {
       setReclassifying(false);
     }
@@ -900,7 +902,14 @@ export default function App() {
         onTipSaved={handleTipSaved}
         onRefresh={async () => { await loadEmails(true); }}
         unclassifiedEmails={pendingNewEmails}
-        onReclassify={async () => { openReclassifyModal(); }}
+        onReclassify={async () => {
+          // Clear banner immediately on click so Tony sees feedback. If he
+          // cancels the modal, polling will repopulate. If he submits,
+          // handleReclassifySubmit re-confirms the cleared state.
+          setNewEmailCount(0);
+          setPendingNewEmails([]);
+          openReclassifyModal();
+        }}
         reclassifying={reclassifying}
         loaded={sectionsLoaded.emails}
         lastEmailAiAt={lastEmailAiAt}
