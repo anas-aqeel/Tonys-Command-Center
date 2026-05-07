@@ -105,6 +105,38 @@ type LinearItem = {
   description?: string | null; labels?: string[]; url?: string;
 };
 
+// LLM JSON sanitizer: walks the string and escapes inner `"` chars that the
+// model failed to escape (common Haiku/Sonnet failure mode for subjects like
+// `Notes: "Q3 plan"`). A `"` is treated as the end of a string only if the
+// next non-whitespace char is structural (, } ] :). Anything else mid-string
+// gets converted to `\"`.
+function fixUnescapedJsonQuotes(json: string): string {
+  let out = "";
+  let inString = false;
+  let escapeNext = false;
+  for (let i = 0; i < json.length; i++) {
+    const c = json[i];
+    if (escapeNext) { out += c; escapeNext = false; continue; }
+    if (inString && c === "\\") { out += c; escapeNext = true; continue; }
+    if (c === '"') {
+      if (!inString) { out += c; inString = true; continue; }
+      // Closing? Look ahead for structural char.
+      let j = i + 1;
+      while (j < json.length && /\s/.test(json[j])) j++;
+      const next = json[j];
+      if (next === "," || next === "}" || next === "]" || next === ":" || j >= json.length) {
+        out += c;
+        inString = false;
+      } else {
+        out += '\\"';
+      }
+      continue;
+    }
+    out += c;
+  }
+  return out;
+}
+
 // ─── Live Gmail fetch via Replit google-mail connector ────────────────────────
 
 async function fetchLiveEmails(): Promise<{ important: EmailImportant[]; fyi: EmailFyi[]; promotions: EmailPromotion[] } | null> {
@@ -161,7 +193,7 @@ async function fetchLiveEmails(): Promise<{ important: EmailImportant[]; fyi: Em
     } else {
       const claudeResponse = await createTrackedMessage("brief_email_triage", {
         model: "claude-haiku-4-5",
-        max_tokens: 1024,
+        max_tokens: 4096,
         system: `You are Tony Diaz's email triage assistant for FlipIQ (real estate wholesaling).
 Classify each email into exactly 3 categories: "important", "fyi", or "promotions".
 Important: from @flipiq.com team, known contacts (chris.wesser, ethan, ramy, marisol, cesar@eoslab), or keywords: urgent, contract, payment, demo, equity, funding, deal.
@@ -181,9 +213,25 @@ Promotions shape: { "from": string, "subj": string, "why": string }`,
     }
 
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return null;
+    if (!jsonMatch) {
+      console.warn("[brief] No JSON found in raw output. First 500 chars:", raw.slice(0, 500));
+      return null;
+    }
 
-    const parsed = JSON.parse(jsonMatch[0]) as { important?: EmailImportant[]; fyi?: EmailFyi[]; promotions?: EmailPromotion[] };
+    let parsed: { important?: EmailImportant[]; fyi?: EmailFyi[]; promotions?: EmailPromotion[] };
+    try {
+      parsed = JSON.parse(jsonMatch[0]);
+    } catch {
+      // Common LLM failure: unescaped inner double quotes in string values.
+      // Sanitize and retry once.
+      try {
+        parsed = JSON.parse(fixUnescapedJsonQuotes(jsonMatch[0]));
+      } catch (parseErr) {
+        console.warn("[brief] JSON.parse failed even after sanitize:", parseErr instanceof Error ? parseErr.message : parseErr);
+        console.warn("[brief] Raw length:", jsonMatch[0].length, "first 500:", jsonMatch[0].slice(0, 500));
+        return null;
+      }
+    }
 
     // Attach gmailMessageId by matching back to the original message list
     const attachMsgId = (e: EmailImportant): EmailImportant => {

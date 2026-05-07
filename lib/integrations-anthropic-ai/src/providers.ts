@@ -90,7 +90,8 @@ export async function testProvider(
   const t0 = Date.now();
   const result = await generateText({
     model,
-    maxOutputTokens: 8,
+    // OpenAI rejects values < 16; other providers accept low values fine.
+    maxOutputTokens: 32,
     messages: [{ role: "user", content: 'Reply with the single word: "ok".' }],
   });
   return {

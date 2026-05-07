@@ -245,12 +245,14 @@ export function SalesView({ contacts: initialContacts, calls, calSide, onAttempt
           <div
             style={{
               ...card,
+              padding: 0,
               maxWidth: chatOpen ? 920 : 560,
               width: "92%", maxHeight: "85vh",
               transition: "max-width 0.2s ease",
+              display: "flex",
+              overflow: "hidden",
             }}
             onClick={e => e.stopPropagation()}
-            className="grid sm:grid-cols-2 md:grid-cols-3 2xl:grid-cols-4"
           >
             {/* Brief panel */}
             <div style={{ flex: 1, padding: "18px 20px", overflowY: "auto", minWidth: 0, ...(chatOpen ? { borderRight: `1px solid ${C.brd}` } : {}) }}>

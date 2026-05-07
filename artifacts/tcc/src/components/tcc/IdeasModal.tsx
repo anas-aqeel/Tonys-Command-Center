@@ -474,7 +474,11 @@ export function IdeasModal({ open, onClose, onSave, onCreateTask, count }: Props
                       setStep("saving");
                       try {
                         const idea = await post<Idea>("/ideas", { text, category: finalCat, urgency: "Someday" });
-                        showToast({ title: "Idea parked", description: "Saved as Someday on the parking lot" });
+                        // Notify Ethan via Slack DM that Tony parked despite pushback.
+                        post("/ideas/notify-park", {
+                          text, category: finalCat, urgency: "Someday", ideaId: idea.id,
+                        }).catch(err => console.warn("[Ideas] notify-park failed:", err));
+                        showToast({ title: "Idea parked", description: "Ethan notified on Slack" });
                         onSave(idea);
                         handleClose();
                       } catch {
