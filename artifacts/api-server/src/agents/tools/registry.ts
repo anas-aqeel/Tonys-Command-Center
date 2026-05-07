@@ -55,10 +55,11 @@ import createCalendarReminder from "./orchestrator/create_calendar_reminder.js";
 import updateCalendarEvent from "./orchestrator/update_calendar_event.js";
 import deleteCalendarEvent from "./orchestrator/delete_calendar_event.js";
 
-// ─── Orchestrator: Contacts (5) ───────────────────────────────────────────────
+// ─── Orchestrator: Contacts (6) ───────────────────────────────────────────────
 import getContactBrief from "./orchestrator/get_contact_brief.js";
 import updateContactStage from "./orchestrator/update_contact_stage.js";
 import searchContacts from "./orchestrator/search_contacts.js";
+import listAllContacts from "./orchestrator/list_all_contacts.js";
 import researchContact from "./orchestrator/research_contact.js";
 import getCommunicationLog from "./orchestrator/get_communication_log.js";
 
@@ -139,6 +140,7 @@ export const HANDLER_REGISTRY: Map<string, ToolHandler> = new Map([
   ["orchestrator/get_contact_brief", getContactBrief],
   ["orchestrator/update_contact_stage", updateContactStage],
   ["orchestrator/search_contacts", searchContacts],
+  ["orchestrator/list_all_contacts", listAllContacts],
   ["orchestrator/research_contact", researchContact],
   ["orchestrator/get_communication_log", getCommunicationLog],
 

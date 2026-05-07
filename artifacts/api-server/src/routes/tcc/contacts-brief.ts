@@ -35,7 +35,7 @@ router.post("/contacts/brief", async (req, res): Promise<void> => {
     // ILIKE match on the contact's canonical name. See lib/db/src/schema/tcc.ts.
     const recentMeetings = contact.name
       ? await db.select().from(meetingHistoryTable)
-          .where(ilike(meetingHistoryTable.contactName, `%${contact.name}%`))
+          .where(ilike(meetingHistoryTable.contactName, `%${contact.name.trim()}%`))
           .orderBy(desc(meetingHistoryTable.date))
           .limit(5)
       : [];
@@ -86,11 +86,17 @@ router.post("/contacts/brief", async (req, res): Promise<void> => {
       context += `\n\nOpen Tasks Related to This Person:\n${openTasks.map(t => `- ${t}`).join("\n")}`;
     }
 
+    // Always emit explicit counts so the AI can distinguish "data was checked
+    // and was empty" from "data wasn't loaded into the prompt". Without this,
+    // the AI tended to claim "no communication log provided" when in fact
+    // both sources had simply been empty for this contact.
     if (recentComms.length > 0) {
       context += `\n\nRecent Communications (last ${recentComms.length}):`;
       for (const c of recentComms) {
         context += `\n- [${c.channel}] ${c.loggedAt ? new Date(c.loggedAt).toLocaleDateString() : "?"}: ${c.summary || c.subject || "No summary"}`;
       }
+    } else {
+      context += `\n\nRecent Communications: 0 entries.`;
     }
 
     if (recentMeetings.length > 0) {
@@ -103,6 +109,8 @@ router.post("/contacts/brief", async (req, res): Promise<void> => {
         const body = parts.length > 0 ? parts.join(" | ") : "No notes";
         context += `\n- [${m.date}] ${body}`;
       }
+    } else {
+      context += `\n\nRecent Meetings: 0 entries.`;
     }
 
     const userPrompt = `You are Tony Diaz's sales assistant. Generate a pre-call brief for Tony. Be direct and actionable. Tony has ADHD so keep it scannable.
@@ -218,7 +226,7 @@ router.post("/contacts/brief/chat", async (req, res): Promise<void> => {
     // meeting_history rows match by contact name (no contact_id column).
     const recentMeetings = contact.name
       ? await db.select().from(meetingHistoryTable)
-          .where(ilike(meetingHistoryTable.contactName, `%${contact.name}%`))
+          .where(ilike(meetingHistoryTable.contactName, `%${contact.name.trim()}%`))
           .orderBy(desc(meetingHistoryTable.date))
           .limit(5)
       : [];
@@ -249,15 +257,17 @@ router.post("/contacts/brief/chat", async (req, res): Promise<void> => {
       contextBlock += `\n- Last interaction: ${lastInteractionAt.toLocaleDateString()} (via ${lastInteractionVia})`;
     }
 
+    // Always emit explicit counts on both sources so the AI can't claim "data
+    // not provided" when it was checked-and-empty. The brief chat used to say
+    // "I don't see any communication log here" even when meetings existed.
     if (recentComms.length > 0) {
       contextBlock += `\n\nRecent communications (last ${recentComms.length}):`;
       for (const c of recentComms) {
         const date = c.loggedAt ? new Date(c.loggedAt).toLocaleDateString() : "?";
         contextBlock += `\n- [${c.channel}] ${date}: ${c.summary || c.subject || "—"}`;
       }
-    } else if (recentMeetings.length === 0) {
-      // Only claim "no entries" when BOTH comms log AND meetings are empty.
-      contextBlock += `\n\nNo communication log entries.`;
+    } else {
+      contextBlock += `\n\nRecent communications: 0 entries.`;
     }
 
     if (recentMeetings.length > 0) {
@@ -270,6 +280,8 @@ router.post("/contacts/brief/chat", async (req, res): Promise<void> => {
         const body = parts.length > 0 ? parts.join(" | ") : "No notes";
         contextBlock += `\n- [${m.date}] ${body}`;
       }
+    } else {
+      contextBlock += `\n\nRecent meetings: 0 entries.`;
     }
 
     contextBlock += `\n\n---\n\nPRE-CALL BRIEF ALREADY SHOWN TO TONY:\n${briefText}`;
