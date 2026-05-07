@@ -67,17 +67,30 @@ export async function analyzeFeedback(input: AnalyzeFeedbackInput): Promise<Anal
     .limit(1);
 
   const proposalId = proposal?.id ?? null;
-  const consumedOutcome = runFailed ? "noise" : (proposalId ? "proposal_created" : "no_proposal");
 
-  // Mark feedback rows consumed.
-  await db.update(agentFeedbackTable).set({
-    consumedAt: new Date(),
-    trainingRunId: input.trainingRunId,
-    consumedOutcome,
-  }).where(and(
-    eq(agentFeedbackTable.agent, input.agent),
-    inArray(agentFeedbackTable.id, input.feedbackIds),
-  ));
+  // On error: RELEASE the feedback rows back to the queue (don't mark consumed)
+  // so Tony can retry the Train click. Mirrors sweepStuckRuns() behavior.
+  // On success-no-proposal or success-with-proposal: mark consumed with the right outcome.
+  if (runFailed) {
+    await db.update(agentFeedbackTable).set({
+      consumedAt: null,
+      trainingRunId: null,
+      consumedOutcome: null,
+    }).where(and(
+      eq(agentFeedbackTable.agent, input.agent),
+      inArray(agentFeedbackTable.id, input.feedbackIds),
+    ));
+  } else {
+    const consumedOutcome = proposalId ? "proposal_created" : "no_proposal";
+    await db.update(agentFeedbackTable).set({
+      consumedAt: new Date(),
+      trainingRunId: input.trainingRunId,
+      consumedOutcome,
+    }).where(and(
+      eq(agentFeedbackTable.agent, input.agent),
+      inArray(agentFeedbackTable.id, input.feedbackIds),
+    ));
+  }
 
   // Finalize the run.
   if (runFailed) {

@@ -72,6 +72,12 @@ export async function getTrainingState(agent: string): Promise<TrainingState> {
 
 // Apply an approved proposal — write each diff into agent_memory_entries.
 // Atomic: all diffs apply or none (transaction).
+//
+// Archive: the *actually replaced* content is stamped into each diff as
+// `before_at_apply` before the overwrite. This preserves the real prior
+// content (which may differ from Coach's earlier `before` snapshot if Tony
+// edited the section in between) so the proposal row functions as the audit
+// trail / rollback source.
 export async function applyApprovedProposal(proposalId: string, decidedBy: string): Promise<void> {
   await db.transaction(async (tx) => {
     const [proposal] = await tx.select().from(agentMemoryProposalsTable)
@@ -82,12 +88,26 @@ export async function applyApprovedProposal(proposalId: string, decidedBy: strin
 
     // Coach's submit_proposal stores diffs with snake_case keys to match the
     // tool's Anthropic schema. Normalize here so we tolerate either casing.
-    const diffs = proposal.diffs as Array<{ kind: string; section_name?: string; sectionName?: string; before?: string; after: string }>;
+    const diffs = proposal.diffs as Array<{ kind: string; section_name?: string; sectionName?: string; before?: string; before_at_apply?: string; after: string }>;
+    const archivedDiffs: typeof diffs = [];
     for (const d of diffs) {
       const sectionName = d.section_name ?? d.sectionName;
       if (!sectionName) {
         throw new Error(`Diff missing section_name: ${JSON.stringify(d).slice(0, 200)}`);
       }
+
+      // Read the live content before we overwrite it — that's the real archive.
+      const [existing] = await tx.select({ content: agentMemoryEntriesTable.content })
+        .from(agentMemoryEntriesTable)
+        .where(and(
+          eq(agentMemoryEntriesTable.agent, proposal.agent),
+          eq(agentMemoryEntriesTable.kind, d.kind),
+          eq(agentMemoryEntriesTable.sectionName, sectionName),
+        ))
+        .limit(1);
+      const beforeAtApply = existing?.content ?? "";
+      archivedDiffs.push({ ...d, before_at_apply: beforeAtApply });
+
       await tx.insert(agentMemoryEntriesTable)
         .values({
           agent: proposal.agent,
@@ -111,6 +131,7 @@ export async function applyApprovedProposal(proposalId: string, decidedBy: strin
       status: "approved",
       decidedAt: new Date(),
       decidedBy,
+      diffs: archivedDiffs,
     }).where(eq(agentMemoryProposalsTable.id, proposalId));
   });
 }
