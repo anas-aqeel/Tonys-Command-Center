@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { get, post, patch, del } from "@/lib/api";
 import { C, F, FS, btn1, btn2 } from "./constants";
 import { showToast } from "./Toast";
@@ -70,24 +70,29 @@ function IdeaDetailModal({ idea, onClose, onUpdated, onDeleted, onCreateTask }: 
   const [parking, setParking] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [notifying, setNotifying] = useState<null | "slack" | "email" | "ethan">(null);
-  // Slack ID for the current assignee, looked up from /ideas/team-members on
-  // first AI Reflection tab open. Used to enable/disable the Slack button +
-  // surface a tooltip explaining why it's disabled.
-  const [assigneeSlackId, setAssigneeSlackId] = useState<string | null | undefined>(undefined);
+  // Team members fed both the Assignment dropdown AND the AI Reflection tab's
+  // Slack-id lookup. Fetched once when the modal opens so the dropdown is
+  // ready immediately and the Slack-button tooltip resolves without a second
+  // round-trip.
+  type TeamMember = { name: string; email: string | null; slackId?: string | null };
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
+  const [assigneeMode, setAssigneeMode] = useState<"team" | "custom">(
+    () => idea.assigneeName && !idea.assigneeEmail ? "custom" : "team"
+  );
   useEffect(() => {
-    if (tab !== "ai" || assigneeSlackId !== undefined) return;
-    if (!idea.assigneeName && !idea.assigneeEmail) { setAssigneeSlackId(null); return; }
-    get<{ ok: boolean; members: Array<{ name: string; email: string | null; slackId?: string | null }> }>("/ideas/team-members")
-      .then(res => {
-        if (!res?.ok) { setAssigneeSlackId(null); return; }
-        const m = res.members.find(mm =>
-          (idea.assigneeName && mm.name?.toLowerCase() === String(idea.assigneeName).toLowerCase()) ||
-          (idea.assigneeEmail && mm.email && mm.email.toLowerCase() === String(idea.assigneeEmail).toLowerCase())
-        );
-        setAssigneeSlackId(m?.slackId || null);
-      })
-      .catch(() => setAssigneeSlackId(null));
-  }, [tab, assigneeSlackId, idea.assigneeName, idea.assigneeEmail]);
+    get<{ ok: boolean; members: TeamMember[] }>("/ideas/team-members")
+      .then(res => { if (res?.ok) setTeamMembers(res.members); })
+      .catch(() => {});
+  }, []);
+
+  const assigneeSlackId = useMemo(() => {
+    if (!idea.assigneeName && !idea.assigneeEmail) return null;
+    const m = teamMembers.find(mm =>
+      (idea.assigneeName && mm.name?.toLowerCase() === String(idea.assigneeName).toLowerCase()) ||
+      (idea.assigneeEmail && mm.email && mm.email.toLowerCase() === String(idea.assigneeEmail).toLowerCase())
+    );
+    return m?.slackId || null;
+  }, [teamMembers, idea.assigneeName, idea.assigneeEmail]);
 
   const hasChanges = form.text !== (idea.text || "") || form.category !== (idea.category || "") ||
     form.urgency !== (idea.urgency || "") || form.techType !== (idea.techType || "") ||
@@ -147,15 +152,32 @@ function IdeaDetailModal({ idea, onClose, onUpdated, onDeleted, onCreateTask }: 
     setRethinking(false);
   };
 
+  // Map server error codes to friendly messages. Falls back to a stripped /
+  // truncated raw message for unknown codes — never shows an HTML 404 body in
+  // a toast.
+  const friendlyError = (raw: string | undefined, fallback: string): string => {
+    if (!raw) return fallback;
+    const stripped = raw.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+    const codes: Record<string, string> = {
+      no_assignee: "No assignee on this idea",
+      no_email: "Assignee has no email on file",
+      no_slack_id: "Assignee has no Slack ID linked",
+      slack_failed: "Slack rejected the message",
+    };
+    if (codes[stripped]) return codes[stripped];
+    if (/cannot post/i.test(stripped)) return "Endpoint not available — try refreshing the page";
+    return stripped.slice(0, 140);
+  };
+
   const handleNotifySlack = async () => {
     if (notifying) return;
     setNotifying("slack");
     try {
       const r = await post<{ ok: boolean; error?: string }>(`/ideas/${idea.id}/notify-assignee-slack`, {});
       if (r?.ok) showToast({ title: "Slack DM sent to assignee" });
-      else showToast({ title: "Couldn't DM assignee", description: r?.error || "Slack send failed", variant: "error" });
+      else showToast({ title: "Couldn't DM assignee", description: friendlyError(r?.error, "Slack send failed"), variant: "error" });
     } catch (err) {
-      showToast({ title: "Couldn't DM assignee", description: err instanceof Error ? err.message : String(err), variant: "error" });
+      showToast({ title: "Couldn't DM assignee", description: friendlyError(err instanceof Error ? err.message : String(err), "Network error"), variant: "error" });
     }
     setNotifying(null);
   };
@@ -166,9 +188,9 @@ function IdeaDetailModal({ idea, onClose, onUpdated, onDeleted, onCreateTask }: 
     try {
       const r = await post<{ ok: boolean; error?: string }>(`/ideas/${idea.id}/notify-assignee-email`, {});
       if (r?.ok) showToast({ title: "Email sent to assignee" });
-      else showToast({ title: "Couldn't email assignee", description: r?.error || "Email send failed", variant: "error" });
+      else showToast({ title: "Couldn't email assignee", description: friendlyError(r?.error, "Email send failed"), variant: "error" });
     } catch (err) {
-      showToast({ title: "Couldn't email assignee", description: err instanceof Error ? err.message : String(err), variant: "error" });
+      showToast({ title: "Couldn't email assignee", description: friendlyError(err instanceof Error ? err.message : String(err), "Network error"), variant: "error" });
     }
     setNotifying(null);
   };
@@ -185,7 +207,7 @@ function IdeaDetailModal({ idea, onClose, onUpdated, onDeleted, onCreateTask }: 
       if (r?.slackOk) showToast({ title: "Ethan notified on Slack" });
       else showToast({ title: "Slack DM may have failed", description: "Check #engineering or retry", variant: "error" });
     } catch (err) {
-      showToast({ title: "Couldn't notify Ethan", description: err instanceof Error ? err.message : String(err), variant: "error" });
+      showToast({ title: "Couldn't notify Ethan", description: friendlyError(err instanceof Error ? err.message : String(err), "Network error"), variant: "error" });
     }
     setNotifying(null);
   };
@@ -304,17 +326,44 @@ function IdeaDetailModal({ idea, onClose, onUpdated, onDeleted, onCreateTask }: 
                 </div>
               </div>
 
-              {/* Assignment block */}
+              {/* Assignment block — dropdown auto-maps email from team_roles
+                  (same UX as task creation). Custom mode falls back to manual
+                  name + email entry for someone not in the roster. */}
               <div style={{ fontSize: 10, fontWeight: 700, color: C.mut, textTransform: "uppercase", letterSpacing: 0.6, margin: "6px 0 8px" }}>Assignment</div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 18 }}>
-                <div>
-                  <label style={lbl}>Assignee Name</label>
-                  <input value={form.assigneeName} onChange={e => setForm(f => ({ ...f, assigneeName: e.target.value }))} style={inp} placeholder="e.g. Ethan" />
-                </div>
-                <div>
-                  <label style={lbl}>Assignee Email</label>
-                  <input value={form.assigneeEmail} onChange={e => setForm(f => ({ ...f, assigneeEmail: e.target.value }))} style={inp} placeholder="e.g. ethan@flipiq.com" />
-                </div>
+              <div style={{ marginBottom: 18 }}>
+                <label style={lbl}>Assignee {teamMembers.length > 0 && <span style={{ color: C.grn, fontWeight: 400 }}>({teamMembers.length} from team roster)</span>}</label>
+                <select
+                  value={assigneeMode === "custom" ? "__custom__" : (form.assigneeName ? `${form.assigneeName}|${form.assigneeEmail}` : "")}
+                  onChange={e => {
+                    const val = e.target.value;
+                    if (!val) {
+                      setAssigneeMode("team");
+                      setForm(f => ({ ...f, assigneeName: "", assigneeEmail: "" }));
+                    } else if (val === "__custom__") {
+                      setAssigneeMode("custom");
+                      setForm(f => ({ ...f, assigneeName: "", assigneeEmail: "" }));
+                    } else {
+                      const [name, email] = val.split("|");
+                      setAssigneeMode("team");
+                      setForm(f => ({ ...f, assigneeName: name, assigneeEmail: email || "" }));
+                    }
+                  }}
+                  style={{ ...inp, cursor: "pointer" }}
+                >
+                  <option value="">— No assignee —</option>
+                  {teamMembers.map(m => (
+                    <option key={`${m.name}|${m.email || ""}`} value={`${m.name}|${m.email || ""}`}>
+                      {m.name}{m.slackId ? " ✓ Slack" : ""}{m.email ? ` · ${m.email}` : " (Slack only)"}
+                    </option>
+                  ))}
+                  <option value="__custom__">+ Enter custom name &amp; email...</option>
+                </select>
+                {assigneeMode === "custom" && (
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 8 }}>
+                    <input value={form.assigneeName} onChange={e => setForm(f => ({ ...f, assigneeName: e.target.value }))} style={inp} placeholder="Name (e.g. Ethan)" />
+                    <input type="email" value={form.assigneeEmail} onChange={e => setForm(f => ({ ...f, assigneeEmail: e.target.value }))} style={inp} placeholder="email@example.com" />
+                  </div>
+                )}
               </div>
 
               {/* Save button */}
