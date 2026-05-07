@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { post } from "@/lib/api";
 import { C, F, FS, inp, btn1, btn2, lbl } from "./constants";
+import { showTrainNowToast } from "@/lib/trainNowToast";
 
 interface HigherPriorityItem {
   id: string;
@@ -92,13 +93,24 @@ export function CreateTaskModal({ open, onClose, onSave }: Props) {
     setStep("saving");
     setError("");
     try {
-      const task = await post<SavedTask>("/tasks/create-with-check", {
+      const task = await post<SavedTask & { feedback_id?: string }>("/tasks/create-with-check", {
         text: text.trim(),
         dueDate: dueDate || undefined,
         overrideWarning,
         taskType,
         size: size ?? undefined,
       });
+      // If user just proceeded past a priority warning, that's a feedback row
+      // — surface the Train-now toast so Coach can learn from the override.
+      if (overrideWarning) {
+        showTrainNowToast({
+          agent: "tasks",
+          feedbackId: task.feedback_id ?? null,
+          sourceId: task.id,
+          title: "Task created (priority override logged)",
+          description: "Train the tasks agent on this override?",
+        });
+      }
       if (mountedRef.current) {
         onSave(task);
         reset();

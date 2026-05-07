@@ -335,16 +335,21 @@ router.post("/tasks/create-with-check", async (req, res): Promise<void> => {
     .returning();
 
   // If user proceeded after a priority warning, log it as feedback so Coach
-  // can learn what kind of warnings Tony overrides.
+  // can learn what kind of warnings Tony overrides. Awaited so we can return
+  // feedback_id to the FE for the Train-now toast deep-link.
+  let feedbackId: string | undefined;
   if (overrideWarning) {
-    recordFeedback({
-      agent: "tasks",
-      skill: "check-priority",
-      sourceType: "override",
-      sourceId: task.id,
-      reviewText: overrideWarning,
-      snapshotExtra: { taskText: text, dueDate, priorityCheck },
-    }).catch(err => console.error("[tasks] recordFeedback failed:", err));
+    try {
+      const fb = await recordFeedback({
+        agent: "tasks",
+        skill: "check-priority",
+        sourceType: "override",
+        sourceId: task.id,
+        reviewText: overrideWarning,
+        snapshotExtra: { taskText: text, dueDate, priorityCheck },
+      });
+      feedbackId = fb.feedbackId;
+    } catch (err) { console.error("[tasks] recordFeedback failed:", err); }
   }
 
   // Create matching Google Task (fire-and-forget, update googleTaskId when done)
@@ -357,7 +362,7 @@ router.post("/tasks/create-with-check", async (req, res): Promise<void> => {
     }
   }).catch(err => console.warn("[tasks] Google Task create sync failed:", err));
 
-  res.status(201).json(task);
+  res.status(201).json({ ...task, feedback_id: feedbackId });
 });
 
 async function syncGoogleCompletions(): Promise<number> {

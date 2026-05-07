@@ -358,15 +358,17 @@ function AgentDetail({ agent, pipelineEnabled, pendingHint, onHintConsumed }: {
 
   const startTraining = () => {
     if (selected.size === 0) return;
-    // Cost-saving nudge: if Tony has just 1 row selected but more unconsumed
-    // rows exist for this agent, ONE Coach run can chew through all of them.
-    // Show the modal so he picks "all available" (cheaper) or "just selected".
+    // Cost-saving nudge: whenever there are MORE unconsumed rows than the
+    // user has selected, ONE Coach run can chew through all of them. Show
+    // the modal so they pick "all available" (cheaper) or "just selected".
+    // Skip when (a) only 1 unconsumed total — there's no batching upside,
+    // or (b) selected already covers every unconsumed row.
     const allUnconsumed = feedback.filter(f => {
       const consumed = (f as { consumedAt?: string | null; consumed_at?: string | null }).consumedAt
         ?? (f as { consumed_at?: string | null }).consumed_at;
       return consumed == null;
     }).map(f => f.id);
-    if (selected.size === 1 && allUnconsumed.length > 1) {
+    if (allUnconsumed.length > 1 && selected.size < allUnconsumed.length) {
       setConfirmTrain({ selectedCount: selected.size, allUnconsumedIds: allUnconsumed });
       return;
     }
@@ -456,7 +458,7 @@ function AgentDetail({ agent, pipelineEnabled, pendingHint, onHintConsumed }: {
               Train on all available feedback?
             </div>
             <div style={{ fontSize: 13, color: C.sub, lineHeight: 1.5, marginBottom: 18 }}>
-              You selected <strong>1 feedback</strong>, but there are <strong>{confirmTrain.allUnconsumedIds.length - 1}</strong> more unconsumed rows for <strong style={{ textTransform: "capitalize" }}>{agent}</strong>. Training all together is <strong>one Coach run</strong> instead of {confirmTrain.allUnconsumedIds.length} — saves cost, and Coach finds patterns across the batch instead of treating each in isolation.
+              You selected <strong>{confirmTrain.selectedCount} feedback{confirmTrain.selectedCount === 1 ? "" : "s"}</strong>, but there are <strong>{confirmTrain.allUnconsumedIds.length - confirmTrain.selectedCount}</strong> more unconsumed rows for <strong style={{ textTransform: "capitalize" }}>{agent}</strong>. Training all together is <strong>one Coach run</strong> — saves tokens, and Coach finds patterns across the batch instead of treating each in isolation.
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               <button
@@ -469,7 +471,7 @@ function AgentDetail({ agent, pipelineEnabled, pendingHint, onHintConsumed }: {
                 onClick={() => { const ids = Array.from(selected); setConfirmTrain(null); fireTraining(ids); }}
                 style={{ ...btnGhost, width: "100%", padding: "10px 14px", fontSize: 13 }}
               >
-                Continue anyway (just the 1 I selected)
+                Continue anyway (just the {confirmTrain.selectedCount} I selected)
               </button>
               <button
                 onClick={() => setConfirmTrain(null)}
