@@ -43,12 +43,28 @@ router.post("/cron/eod", verifyCron, async (_req, res) => {
   }
 });
 
-// Daily at 4 AM Pacific — business plan ingest
+// Daily at 4 AM Pacific — business plan ingest + piggyback email reclassify.
+// On Vercel Hobby tier we can't run /cron/email-reclassify on its own 6h
+// schedule (Hobby caps at 2 crons total, daily-only), so the once-a-day
+// email reclassify runs here. Plan-ingest is awaited first so its success
+// status is the response; email reclassify runs after with its own try/catch
+// so an email failure can't mask a successful plan ingest.
 router.post("/cron/plan-ingest", verifyCron, async (_req, res) => {
   try {
     const { syncContextIngest } = await import("./sheets-sync");
     await syncContextIngest();
-    res.json({ ok: true, task: "plan-ingest" });
+
+    let emailReclassify: { ok: boolean; result?: unknown; error?: string } = { ok: false };
+    try {
+      const { reclassifyRecentEmails } = await import("./brief");
+      const r = await reclassifyRecentEmails({ hoursBack: 24 });
+      emailReclassify = { ok: true, result: r };
+    } catch (err) {
+      logger.warn({ err }, "Piggyback email-reclassify failed (plan-ingest succeeded)");
+      emailReclassify = { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+
+    res.json({ ok: true, task: "plan-ingest", emailReclassify });
   } catch (err) {
     logger.error({ err }, "Cron plan-ingest failed");
     res.status(500).json({ error: "plan-ingest failed" });
