@@ -3,9 +3,9 @@ import { z } from "zod";
 import { anthropic, createTrackedMessage } from "@workspace/integrations-anthropic-ai";
 import { isAgentRuntimeEnabled } from "../../agents/flags.js";
 import { runAgent } from "../../agents/runtime.js";
-import { db, contactsTable } from "@workspace/db";
+import { db, contactsTable, meetingHistoryTable } from "@workspace/db";
 import { contactIntelligenceTable, communicationLogTable, contactBriefsTable } from "../../lib/schema-v2";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, ilike } from "drizzle-orm";
 
 const router: IRouter = Router();
 
@@ -31,11 +31,47 @@ router.post("/contacts/brief", async (req, res): Promise<void> => {
       .orderBy(desc(communicationLogTable.loggedAt))
       .limit(10);
 
+    // meeting_history is keyed by contact_name (text), not contact_id —
+    // ILIKE match on the contact's canonical name. See lib/db/src/schema/tcc.ts.
+    const recentMeetings = contact.name
+      ? await db.select().from(meetingHistoryTable)
+          .where(ilike(meetingHistoryTable.contactName, `%${contact.name}%`))
+          .orderBy(desc(meetingHistoryTable.date))
+          .limit(5)
+      : [];
+
+    // Compute last interaction across both comms log and meetings so the
+    // brief shows "Last meeting: 2026-05-06 — <topic>" instead of
+    // "No communication log entries" when meetings exist but no comms do.
+    const lastCommAt = recentComms[0]?.loggedAt ? new Date(recentComms[0].loggedAt) : null;
+    const lastMeetingAt = recentMeetings[0]?.date ? new Date(recentMeetings[0].date) : null;
+    let lastInteractionAt: Date | null = null;
+    let lastInteractionVia: string | null = null;
+    if (lastCommAt && lastMeetingAt) {
+      if (lastCommAt >= lastMeetingAt) {
+        lastInteractionAt = lastCommAt;
+        lastInteractionVia = recentComms[0].channel;
+      } else {
+        lastInteractionAt = lastMeetingAt;
+        lastInteractionVia = "meeting";
+      }
+    } else if (lastCommAt) {
+      lastInteractionAt = lastCommAt;
+      lastInteractionVia = recentComms[0].channel;
+    } else if (lastMeetingAt) {
+      lastInteractionAt = lastMeetingAt;
+      lastInteractionVia = "meeting";
+    }
+
     let openTasks: string[] = [];
     if (contact.nextStep) openTasks.push(contact.nextStep);
     if (intel?.nextAction) openTasks.push(intel.nextAction);
 
     let context = `Contact: ${contact.name}\nCompany: ${contact.company || "N/A"}\nType: ${contact.type || "N/A"}\nStatus (temperature): ${contact.status}\nPhone: ${contact.phone || "N/A"}\nEmail: ${contact.email || "N/A"}\nNext Step: ${contact.nextStep || "None"}`;
+
+    if (lastInteractionAt) {
+      context += `\nLast interaction: ${lastInteractionAt.toLocaleDateString()} (via ${lastInteractionVia})`;
+    }
 
     if (intel) {
       context += `\n\nIntelligence:\nAI Score: ${intel.aiScore || "Not scored"}\nStage (pipeline): ${intel.stage}\nLinkedIn: ${intel.linkedinUrl || "N/A"}\nPersonality Notes: ${intel.personalityNotes || "N/A"}`;
@@ -54,6 +90,18 @@ router.post("/contacts/brief", async (req, res): Promise<void> => {
       context += `\n\nRecent Communications (last ${recentComms.length}):`;
       for (const c of recentComms) {
         context += `\n- [${c.channel}] ${c.loggedAt ? new Date(c.loggedAt).toLocaleDateString() : "?"}: ${c.summary || c.subject || "No summary"}`;
+      }
+    }
+
+    if (recentMeetings.length > 0) {
+      context += `\n\nRecent Meetings (last ${recentMeetings.length}):`;
+      for (const m of recentMeetings) {
+        const parts: string[] = [];
+        if (m.summary) parts.push(`Summary: ${m.summary}`);
+        if (m.outcome) parts.push(`Outcome: ${m.outcome}`);
+        if (m.nextSteps) parts.push(`Next steps: ${m.nextSteps}`);
+        const body = parts.length > 0 ? parts.join(" | ") : "No notes";
+        context += `\n- [${m.date}] ${body}`;
       }
     }
 
@@ -167,8 +215,39 @@ router.post("/contacts/brief/chat", async (req, res): Promise<void> => {
       .orderBy(desc(communicationLogTable.loggedAt))
       .limit(10);
 
+    // meeting_history rows match by contact name (no contact_id column).
+    const recentMeetings = contact.name
+      ? await db.select().from(meetingHistoryTable)
+          .where(ilike(meetingHistoryTable.contactName, `%${contact.name}%`))
+          .orderBy(desc(meetingHistoryTable.date))
+          .limit(5)
+      : [];
+
+    const lastCommAt = recentComms[0]?.loggedAt ? new Date(recentComms[0].loggedAt) : null;
+    const lastMeetingAt = recentMeetings[0]?.date ? new Date(recentMeetings[0].date) : null;
+    let lastInteractionAt: Date | null = null;
+    let lastInteractionVia: string | null = null;
+    if (lastCommAt && lastMeetingAt) {
+      if (lastCommAt >= lastMeetingAt) {
+        lastInteractionAt = lastCommAt;
+        lastInteractionVia = recentComms[0].channel;
+      } else {
+        lastInteractionAt = lastMeetingAt;
+        lastInteractionVia = "meeting";
+      }
+    } else if (lastCommAt) {
+      lastInteractionAt = lastCommAt;
+      lastInteractionVia = recentComms[0].channel;
+    } else if (lastMeetingAt) {
+      lastInteractionAt = lastMeetingAt;
+      lastInteractionVia = "meeting";
+    }
+
     let contextBlock = `Contact record:\n- Name: ${contact.name}\n- Company: ${contact.company || "—"}\n- Type: ${contact.type || "—"}\n- Status: ${contact.status}\n- Stage: ${intel?.stage || "—"}\n- AI Score: ${intel?.aiScore || "—"}\n- LinkedIn: ${intel?.linkedinUrl || "—"}\n- Email: ${contact.email || "—"}\n- Phone: ${contact.phone || "—"}\n- Next step: ${contact.nextStep || "—"}`;
     if (intel?.personalityNotes) contextBlock += `\n- Personality notes: ${intel.personalityNotes}`;
+    if (lastInteractionAt) {
+      contextBlock += `\n- Last interaction: ${lastInteractionAt.toLocaleDateString()} (via ${lastInteractionVia})`;
+    }
 
     if (recentComms.length > 0) {
       contextBlock += `\n\nRecent communications (last ${recentComms.length}):`;
@@ -176,8 +255,21 @@ router.post("/contacts/brief/chat", async (req, res): Promise<void> => {
         const date = c.loggedAt ? new Date(c.loggedAt).toLocaleDateString() : "?";
         contextBlock += `\n- [${c.channel}] ${date}: ${c.summary || c.subject || "—"}`;
       }
-    } else {
+    } else if (recentMeetings.length === 0) {
+      // Only claim "no entries" when BOTH comms log AND meetings are empty.
       contextBlock += `\n\nNo communication log entries.`;
+    }
+
+    if (recentMeetings.length > 0) {
+      contextBlock += `\n\nRecent meetings (last ${recentMeetings.length}):`;
+      for (const m of recentMeetings) {
+        const parts: string[] = [];
+        if (m.summary) parts.push(`Summary: ${m.summary}`);
+        if (m.outcome) parts.push(`Outcome: ${m.outcome}`);
+        if (m.nextSteps) parts.push(`Next steps: ${m.nextSteps}`);
+        const body = parts.length > 0 ? parts.join(" | ") : "No notes";
+        contextBlock += `\n- [${m.date}] ${body}`;
+      }
     }
 
     contextBlock += `\n\n---\n\nPRE-CALL BRIEF ALREADY SHOWN TO TONY:\n${briefText}`;
