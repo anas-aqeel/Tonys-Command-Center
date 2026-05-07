@@ -18,10 +18,6 @@
     {
       "path": "/api/cron/plan-ingest",
       "schedule": "0 11 * * *"
-    },
-    {
-      "path": "/api/cron/email-reclassify",
-      "schedule": "0 */6 * * *"
     }
   ]
 }
