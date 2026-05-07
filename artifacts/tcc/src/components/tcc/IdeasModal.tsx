@@ -83,6 +83,24 @@ interface AssignState {
   note: string;
 }
 
+// Pushback variants (V3 escalate, V4 pushback-park) get a compact, OPTIONAL
+// assign section: pick someone, then opt-in to notifying them per Slack/email.
+// Decoupled from the existing AssignState so the urgency-gated UI for V1/V2
+// stays untouched (Q2 directive).
+interface PushbackAssign {
+  mode: "none" | "team" | "custom";
+  assigneeName: string;
+  assigneeEmail: string;
+  assigneeSlackId: string | null;
+  notifyOn: boolean;
+  notifyEmail: boolean;
+  notifySlack: boolean;
+}
+const blankPushbackAssign = (): PushbackAssign => ({
+  mode: "none", assigneeName: "", assigneeEmail: "", assigneeSlackId: null,
+  notifyOn: false, notifyEmail: false, notifySlack: false,
+});
+
 interface Props {
   open: boolean;
   onClose: () => void;
@@ -103,6 +121,7 @@ export function IdeasModal({ open, onClose, onSave, onCreateTask, count }: Props
   const [pushback, setPushback] = useState<Pushback | null>(null);
   const [override, setOverride] = useState<{ justification: string } | null>(null);
   const [assign, setAssign] = useState<AssignState | null>(null);
+  const [pushbackAssign, setPushbackAssign] = useState<PushbackAssign>(blankPushbackAssign());
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   // Escalate flow: meeting time (datetime-local) + whether to also open the
   // task-creation modal after parking. Defaults: tomorrow 2pm local, create-task ON.
@@ -164,10 +183,135 @@ export function IdeasModal({ open, onClose, onSave, onCreateTask, count }: Props
     setEscalateCreateTask(true);
     setEscalateConfirmation(null);
     setAssign(null);
+    setPushbackAssign(blankPushbackAssign());
     // keep teamMembers cached — no need to reset
   };
 
   const handleClose = () => { reset(); onClose(); };
+
+  // Fires /ideas/notify-assignee for the V3/V4 pushback variants when Tony
+  // chose an assignee AND opted in to notifying them. No-op otherwise.
+  const dispatchPushbackAssigneeNotify = (categoryArg: string, urgencyArg: string) => {
+    const a = pushbackAssign;
+    if (a.mode === "none" || !a.notifyOn || !a.assigneeName.trim()) return;
+    const email = a.assigneeEmail.trim();
+    const slackId = a.assigneeSlackId;
+    const channels: string[] = [];
+    if (a.notifyEmail && email) channels.push("email");
+    if (a.notifySlack && slackId) channels.push("slack");
+    if (channels.length === 0) return;
+    post("/ideas/notify-assignee", {
+      ideaText: text, category: categoryArg, urgency: urgencyArg, dueDate: "",
+      assigneeName: a.assigneeName.trim(),
+      assigneeEmail: email || `${a.assigneeName.trim().toLowerCase().replace(/\s+/g, ".")}@flipiq.com`,
+      slackUserId: slackId || undefined,
+      notifyChannels: channels,
+    }).catch(() => console.warn("[Ideas] pushback assignee notify failed"));
+  };
+
+  // Compact assign section used in BOTH V3 (escalate) and V4 (pushback-park).
+  // Optional — Tony only sees the notify checkbox after picking an assignee,
+  // and channel toggles are gated by whether each channel is reachable.
+  const renderPushbackAssign = (panelTint: string) => {
+    const a = pushbackAssign;
+    const hasEmail = a.assigneeEmail.trim().length > 0;
+    const hasSlack = !!a.assigneeSlackId;
+    const hasAssignee = a.mode !== "none" && a.assigneeName.trim().length > 0;
+    return (
+      <div style={{ marginTop: 12, padding: 10, background: C.card, border: `1px dashed ${panelTint}`, borderRadius: 8 }}>
+        <div style={{ fontSize: 10, fontWeight: 600, color: C.mut, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
+          Assign (optional)
+        </div>
+        <select
+          value={a.mode === "team" ? `${a.assigneeName}|${a.assigneeEmail}|${a.assigneeSlackId || ""}` : a.mode === "custom" ? "__custom__" : ""}
+          onChange={e => {
+            const val = e.target.value;
+            if (!val) {
+              setPushbackAssign({ ...blankPushbackAssign() });
+            } else if (val === "__custom__") {
+              setPushbackAssign({ ...blankPushbackAssign(), mode: "custom" });
+            } else {
+              const [name, email, slackId] = val.split("|");
+              const eHas = !!email;
+              const sHas = !!slackId;
+              setPushbackAssign({
+                mode: "team",
+                assigneeName: name,
+                assigneeEmail: email,
+                assigneeSlackId: slackId || null,
+                notifyOn: false,
+                notifyEmail: eHas,
+                notifySlack: !eHas && sHas,
+              });
+            }
+          }}
+          style={{ ...inp, padding: "6px 10px", fontSize: 13, cursor: "pointer", marginBottom: 8 }}
+        >
+          <option value="">— No assignee —</option>
+          {teamMembers.map(m => (
+            <option key={`${m.name}|${m.email || ""}`} value={`${m.name}|${m.email || ""}|${m.slackId || ""}`}>
+              {m.name}{m.slackId ? " ✓ Slack" : ""}{m.email ? ` · ${m.email}` : " (Slack only)"}
+            </option>
+          ))}
+          <option value="__custom__">+ Enter custom name & email...</option>
+        </select>
+
+        {a.mode === "custom" && (
+          <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+            <input type="text" placeholder="Name" value={a.assigneeName}
+              onChange={e => setPushbackAssign({ ...a, assigneeName: e.target.value })}
+              style={{ ...inp, padding: "6px 10px", fontSize: 13, flex: 1 }} />
+            <input type="email" placeholder="email@example.com" value={a.assigneeEmail}
+              onChange={e => setPushbackAssign({ ...a, assigneeEmail: e.target.value })}
+              style={{ ...inp, padding: "6px 10px", fontSize: 13, flex: 1 }} />
+          </div>
+        )}
+
+        {hasAssignee && (
+          <>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.sub, cursor: "pointer", marginBottom: a.notifyOn ? 8 : 0 }}>
+              <input type="checkbox" checked={a.notifyOn}
+                onChange={e => setPushbackAssign({ ...a, notifyOn: e.target.checked })}
+                style={{ accentColor: panelTint, cursor: "pointer" }} />
+              Send notification to assignee
+            </label>
+            {a.notifyOn && (
+              <div style={{ display: "flex", gap: 6 }}>
+                <button
+                  type="button"
+                  onClick={() => hasEmail && setPushbackAssign({ ...a, notifyEmail: !a.notifyEmail })}
+                  disabled={!hasEmail}
+                  title={!hasEmail ? "No email address for this person" : ""}
+                  style={{
+                    padding: "4px 12px", borderRadius: 6, fontSize: 11, fontWeight: 600, fontFamily: F,
+                    cursor: hasEmail ? "pointer" : "not-allowed",
+                    border: `2px solid ${a.notifyEmail && hasEmail ? C.blu : C.brd}`,
+                    background: a.notifyEmail && hasEmail ? C.bluBg : C.card,
+                    color: a.notifyEmail && hasEmail ? C.blu : hasEmail ? C.sub : C.mut,
+                    opacity: hasEmail ? 1 : 0.45,
+                  }}
+                >📧 Email</button>
+                <button
+                  type="button"
+                  onClick={() => hasSlack && setPushbackAssign({ ...a, notifySlack: !a.notifySlack })}
+                  disabled={!hasSlack}
+                  title={!hasSlack ? "No Slack ID for this person" : ""}
+                  style={{
+                    padding: "4px 12px", borderRadius: 6, fontSize: 11, fontWeight: 600, fontFamily: F,
+                    cursor: hasSlack ? "pointer" : "not-allowed",
+                    border: `2px solid ${a.notifySlack && hasSlack ? "#1D9353" : C.brd}`,
+                    background: a.notifySlack && hasSlack ? "#E8F5E9" : C.card,
+                    color: a.notifySlack && hasSlack ? "#1D9353" : hasSlack ? C.sub : C.mut,
+                    opacity: hasSlack ? 1 : 0.45,
+                  }}
+                >💬 Slack {hasSlack ? "✓" : ""}</button>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    );
+  };
 
   const classify = async () => {
     if (!text.trim()) return;
@@ -220,8 +364,10 @@ export function IdeasModal({ open, onClose, onSave, onCreateTask, count }: Props
         ...(assigneeName ? { assigneeName, ...(assigneeEmail ? { assigneeEmail } : {}), dueDate } : {}),
       });
 
-      // Notify assignee for Now / This Week / This Month per checked channels.
-      if (hasAssignee && assigneeName && finalUrg !== "Someday") {
+      // Notify assignee per checked channels — fires regardless of urgency
+      // (including Someday) per Q2: assignees should be notified whenever
+      // Tony picked them, not gated by urgency.
+      if (hasAssignee && assigneeName) {
         const notifyChannels: string[] = [];
         if (assign?.notifyEmail && assigneeEmail) notifyChannels.push("email");
         if (assign?.notifySlack && assign?.assigneeSlackId) notifyChannels.push("slack");
@@ -236,22 +382,6 @@ export function IdeasModal({ open, onClose, onSave, onCreateTask, count }: Props
         }
       }
 
-      // For "Now" urgency, email Ethan ONLY when the normal-park Slack DM
-      // path won't already DM him below. Without this guard, non-Tech "Now"
-      // ideas were notifying Ethan twice (Slack DM + email). Tech "Now"
-      // ideas don't go through notify-park (they post to #tech-ideas
-      // instead) so Ethan still needs the email there.
-      const willSlackDmEthan = !pushback && finalCat !== "Tech";
-      if (finalUrg === "Now" && !willSlackDmEthan) {
-        post("/ideas/notify-assignee", {
-          ideaText: text, category: finalCat, urgency: finalUrg,
-          dueDate: new Date().toISOString().split("T")[0],
-          assigneeName: "Ethan", assigneeEmail: "ethan@flipiq.com",
-          notifyChannels: ["email"],
-          note: `Urgent idea posted by Tony — action needed today.`,
-        }).catch(() => {});
-      }
-
       if (idea.linearIssue?.identifier) {
         setLinearId(idea.linearIssue.identifier);
         await new Promise<void>(resolve => {
@@ -260,17 +390,21 @@ export function IdeasModal({ open, onClose, onSave, onCreateTask, count }: Props
         });
       }
 
-      // Variant 5 (Normal park): notify Ethan via Slack DM.
-      // Skip for Tech (Variant 1 — already auto-posts to #engineering) and
-      // skip if pushback was active (Variants 3/4 have their own notification paths).
-      const isNormalPark = !pushback && finalCat !== "Tech";
-      if (isNormalPark) {
+      // Q1 (uniform): every variant DMs Ethan directly. This branch covers
+      // Variants 1 (Tech) + 2 (Normal park). Pushback Variants 3/4 have
+      // their own dedicated paths (escalate-to-ethan / pushback Park-It
+      // button below) that already DM him. Tech ALSO gets a #tech-ideas
+      // channel post server-side from POST /ideas — the DM is additive.
+      if (!pushback) {
         post("/ideas/notify-park", {
           text, category: finalCat, urgency: finalUrg, ideaId: idea.id,
         }).catch(err => console.warn("[Ideas] notify-park failed:", err));
-        showToast({ title: "Idea parked", description: "Ethan notified on Slack" });
-      } else if (finalCat === "Tech") {
-        showToast({ title: "Tech idea parked", description: "Posted to #engineering" });
+        showToast({
+          title: finalCat === "Tech" ? "Tech idea parked" : "Idea parked",
+          description: finalCat === "Tech"
+            ? "Posted to #engineering · Ethan DM'd"
+            : "Ethan notified on Slack",
+        });
       } else {
         showToast({ title: "Idea saved" });
       }
@@ -430,6 +564,10 @@ export function IdeasModal({ open, onClose, onSave, onCreateTask, count }: Props
                           : "Slack sent (calendar booking failed)",
                       });
 
+                      // V3 optional assignee notification — fires when Tony
+                      // picked someone in the assign section AND opted in.
+                      dispatchPushbackAssigneeNotify(finalCat, finalUrg);
+
                       onSave(idea);
 
                       // Brief pause so Tony can read the confirmation, then either
@@ -453,6 +591,8 @@ export function IdeasModal({ open, onClose, onSave, onCreateTask, count }: Props
                 >
                   OK, Park It + Notify Ethan
                 </button>
+
+                {renderPushbackAssign(C.red)}
 
                 {/* "Also create a task" — defaults ON. Lets Tony park the idea
                     AND drop a placeholder task into the master list so the work
@@ -489,6 +629,8 @@ export function IdeasModal({ open, onClose, onSave, onCreateTask, count }: Props
                         post("/ideas/notify-park", {
                           text, category: finalCat, urgency: "Someday", ideaId: idea.id,
                         }).catch(err => console.warn("[Ideas] notify-park failed:", err));
+                        // V4 optional assignee notification.
+                        dispatchPushbackAssigneeNotify(finalCat, "Someday");
                         showToast({ title: "Idea parked", description: "Ethan notified on Slack" });
                         onSave(idea);
                         handleClose();
@@ -509,6 +651,7 @@ export function IdeasModal({ open, onClose, onSave, onCreateTask, count }: Props
                     Override — Do It Anyway
                   </button>
                 </div>
+                {renderPushbackAssign(C.amb)}
               </div>
             )}
 

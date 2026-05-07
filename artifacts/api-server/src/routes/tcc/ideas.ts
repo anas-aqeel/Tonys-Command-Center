@@ -445,18 +445,21 @@ router.post("/ideas/notify-override", async (req, res): Promise<void> => {
     snapshotExtra: { ideaText: text, justification },
   }).catch(err => console.error("[ideas/notify-override] recordFeedback failed:", err));
 
-  // Single Slack post to #engineering. Ethan is a member of #engineering, so
-  // the channel post already reaches him — the previous extra DM to his user
-  // ID (U0991BD321Y) was a duplicate notification on his end. Removed.
+  // Q1 (uniform): post to #engineering channel AND DM Ethan directly so every
+  // variant has a consistent personal notification surface. Tony explicitly
+  // wants the DM even though Ethan is also in the channel.
+  const slackText = `*Priority Override Alert*\n\nTony overrode the 90-day plan to prioritize:\n> ${text || "Unknown idea"}\n\n*Justification:* ${justification || "No justification provided"}`;
+  let channelOk = false;
+  let dmOk = false;
   try {
-    await postSlackMessage({
-      channel: "C0A3CS15MPT",
-      text: `*Priority Override Alert*\n\nTony overrode the 90-day plan to prioritize:\n> ${text || "Unknown idea"}\n\n*Justification:* ${justification || "No justification provided"}`,
-    });
-    res.json({ ok: true });
-  } catch {
-    res.json({ ok: true, slackFailed: true });
-  }
+    await postSlackMessage({ channel: "C0A3CS15MPT", text: slackText });
+    channelOk = true;
+  } catch { /* keep going to DM */ }
+  try {
+    await postSlackMessage({ channel: "U0991BD321Y", text: slackText });
+    dmOk = true;
+  } catch { /* swallow */ }
+  res.json({ ok: true, channelOk, dmOk });
 });
 
 router.post("/ideas/escalate-to-ethan", async (req, res): Promise<void> => {
