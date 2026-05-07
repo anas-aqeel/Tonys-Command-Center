@@ -939,23 +939,25 @@ router.post("/ideas/:id/notify-assignee-email", async (req, res): Promise<void> 
 
     const summary = buildReflectionSummary(idea);
     const titleSnippet = idea.text.substring(0, 60) + (idea.text.length > 60 ? "..." : "");
-    // Subject is a plain-text email header (no HTML rendering), so titleSnippet
-    // does not need HTML escaping here.
     const subject = `Idea reflection: ${titleSnippet}`;
-    // Both assigneeName and summary are user/AI-controlled strings rendered
-    // into HTML — escape them to prevent markup injection (e.g. an assignee
-    // name like `<img src=x onerror=...>` would otherwise fire in the client).
+    // Plain-text version (Gmail multipart fallback). Used by clients that
+    // can't render HTML and as the safer default.
+    const plainBody = `Hi ${idea.assigneeName || "there"},\n\nTony shared an AI reflection on this idea:\n\n${summary}\n\n— FlipIQ Command Center`;
+    // HTML version. Both assigneeName and summary are user/AI-controlled
+    // strings rendered into HTML — escape them to prevent markup injection.
     const safeName = escapeHtml(idea.assigneeName || "there");
     const safeSummary = escapeHtml(summary);
-    const body = `<p>Hi ${safeName},</p>
+    const htmlBody = `<p>Hi ${safeName},</p>
 <p>Tony shared an AI reflection on this idea:</p>
 <pre style="background:#F9FAFB;padding:12px;border-radius:6px;font-family:monospace;white-space:pre-wrap;">${safeSummary}</pre>
 <p>— FlipIQ Command Center</p>`;
 
     const { sendSystemEmail } = await import("../../lib/agentmail");
-    const r = await sendSystemEmail({ to: idea.assigneeEmail, subject, body });
+    const r = await sendSystemEmail({ to: idea.assigneeEmail, subject, body: plainBody, html: htmlBody });
     if (!r.ok) {
-      res.status(502).json({ ok: false, error: "email_failed" });
+      // Surface the upstream Gmail error so the FE can show something
+      // actionable (auth expired, recipient invalid, quota, etc.).
+      res.status(502).json({ ok: false, error: r.error || "email_failed", status: r.status });
       return;
     }
     res.json({ ok: true, messageId: r.messageId });

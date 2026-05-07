@@ -163,10 +163,14 @@ function IdeaDetailModal({ idea, onClose, onUpdated, onDeleted, onCreateTask }: 
       no_email: "Assignee has no email on file",
       no_slack_id: "Assignee has no Slack ID linked",
       slack_failed: "Slack rejected the message",
+      email_failed: "Gmail rejected the send — see server logs",
     };
     if (codes[stripped]) return codes[stripped];
     if (/cannot post/i.test(stripped)) return "Endpoint not available — try refreshing the page";
-    return stripped.slice(0, 140);
+    // Common Gmail OAuth failure modes — show actionable messages.
+    if (/invalid_grant|expired/i.test(stripped)) return "Gmail OAuth expired — re-authenticate in Google integration settings";
+    if (/insufficient.*scope|insufficientPermissions/i.test(stripped)) return "Gmail OAuth missing send scope — re-authorize with gmail.send";
+    return stripped.slice(0, 220);
   };
 
   const handleNotifySlack = async () => {

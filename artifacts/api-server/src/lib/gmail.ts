@@ -88,20 +88,55 @@ export async function sendEmail(params: {
   to: string;
   subject: string;
   body: string;
+  /** Optional HTML body. When provided, the email is sent as
+   *  multipart/alternative with both the plain `body` (fallback) and the
+   *  `html` version. Plain-text-only sends keep the original Content-Type. */
+  html?: string;
   threadId?: string;
   cc?: string;
 }): Promise<{ ok: boolean; messageId?: string; error?: string }> {
   try {
     const gmail = await getGmail();
-    const headerLines = [
-      `To: ${params.to}`,
-      `Subject: ${params.subject}`,
-      `Content-Type: text/plain; charset=UTF-8`,
-    ];
-    if (params.cc) headerLines.push(`Cc: ${params.cc}`);
-    headerLines.push("", params.body);
+    let mime: string;
+    if (params.html) {
+      // RFC 2046 multipart/alternative — clients pick HTML when supported,
+      // fall back to plain `body`. Boundary just needs to be unique within
+      // this message; a timestamp + random suffix is plenty.
+      const boundary = `tcc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+      const headers = [
+        `To: ${params.to}`,
+        `Subject: ${params.subject}`,
+        `MIME-Version: 1.0`,
+        `Content-Type: multipart/alternative; boundary="${boundary}"`,
+      ];
+      if (params.cc) headers.splice(2, 0, `Cc: ${params.cc}`);
+      mime = [
+        ...headers,
+        "",
+        `--${boundary}`,
+        `Content-Type: text/plain; charset=UTF-8`,
+        "",
+        params.body,
+        "",
+        `--${boundary}`,
+        `Content-Type: text/html; charset=UTF-8`,
+        "",
+        params.html,
+        "",
+        `--${boundary}--`,
+      ].join("\r\n");
+    } else {
+      const headerLines = [
+        `To: ${params.to}`,
+        `Subject: ${params.subject}`,
+        `Content-Type: text/plain; charset=UTF-8`,
+      ];
+      if (params.cc) headerLines.push(`Cc: ${params.cc}`);
+      headerLines.push("", params.body);
+      mime = headerLines.join("\r\n");
+    }
 
-    const raw = Buffer.from(headerLines.join("\r\n"))
+    const raw = Buffer.from(mime)
       .toString("base64")
       .replace(/\+/g, "-")
       .replace(/\//g, "_")

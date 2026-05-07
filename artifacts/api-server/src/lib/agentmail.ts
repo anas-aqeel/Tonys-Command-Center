@@ -1,48 +1,31 @@
-// AgentMail has been replaced with Resend for system email sending.
-// The sheet-scan feature that depended on AgentMail inboxes is no longer available
-// via this module. Use sendSystemEmail() for outbound system emails.
+// System email sender. Now delegates to Gmail (sendEmail in lib/gmail.ts)
+// using the OAuth credentials already configured for inbox polling — Tony
+// owns flipiq.com via that Google account, so emails go out from the real
+// flipiq.com sender with no domain-verification step required.
+//
+// Resend was the previous implementation but its free tier blocks sending to
+// anyone except the account owner unless the sender domain is verified — a
+// dead-end for system emails to assignees/partners. Gmail bypasses that.
 
-const RESEND_BASE = "https://api.resend.com";
-
-function getResendKey(): string {
-  const key = process.env.RESEND_API_KEY;
-  if (!key) throw new Error("RESEND_API_KEY env var is required for system emails");
-  return key;
-}
+import { sendEmail as sendGmail } from "./gmail.js";
 
 export async function sendSystemEmail(params: {
   to: string;
   subject: string;
   body: string;
-  from?: string;
-}): Promise<{ ok: boolean; messageId?: string }> {
-  try {
-    const res = await fetch(`${RESEND_BASE}/emails`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${getResendKey()}`,
-      },
-      body: JSON.stringify({
-        from: params.from || "TCC <onboarding@resend.dev>",
-        to: [params.to],
-        subject: params.subject,
-        html: params.body,
-      }),
-    });
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      console.error("[resend] Send error:", res.status, text);
-      return { ok: false };
-    }
-
-    const data = await res.json() as { id?: string };
-    return { ok: true, messageId: data.id };
-  } catch (err) {
-    console.error("[resend] Send error:", err);
-    return { ok: false };
-  }
+  /** Optional HTML body. If provided the email is sent as
+   *  multipart/alternative; otherwise the plain `body` is sent as text. */
+  html?: string;
+  from?: string; // ignored — Gmail sends as the authenticated user
+}): Promise<{ ok: boolean; messageId?: string; error?: string; status?: number }> {
+  const r = await sendGmail({
+    to: params.to,
+    subject: params.subject,
+    // Gmail's `body` is the plain-text part; pass html through separately.
+    body: params.body,
+    html: params.html,
+  });
+  return r;
 }
 
 // Legacy exports — agentMailRequest is no longer functional since Replit connectors
@@ -60,6 +43,6 @@ export async function sendViaAgentMail(params: {
   body: string;
   inboxId?: string;
 }): Promise<{ messageId?: string; ok: boolean }> {
-  // Redirect to Resend
-  return sendSystemEmail(params);
+  const r = await sendSystemEmail(params);
+  return { ok: r.ok, messageId: r.messageId };
 }
