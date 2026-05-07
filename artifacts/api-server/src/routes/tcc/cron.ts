@@ -55,6 +55,21 @@ router.post("/cron/plan-ingest", verifyCron, async (_req, res) => {
   }
 });
 
+// Every 6 hours — auto-reclassify emails from the past 24h.
+// Reuses the same triage skill path as POST /brief/emails/reclassify (the
+// agent_email_triage runtime), so each run logs to ai_usage_logs the same
+// way live-time classification does.
+router.post("/cron/email-reclassify", verifyCron, async (_req, res) => {
+  try {
+    const { reclassifyRecentEmails } = await import("./brief");
+    const result = await reclassifyRecentEmails({ hoursBack: 24 });
+    res.json({ task: "email-reclassify", ...result });
+  } catch (err) {
+    logger.error({ err }, "Cron email-reclassify failed");
+    res.status(500).json({ error: "email-reclassify failed" });
+  }
+});
+
 // Hourly 9 AM-6 PM Pacific — demo feedback scanner
 router.post("/cron/demo-feedback", verifyCron, async (_req, res) => {
   try {

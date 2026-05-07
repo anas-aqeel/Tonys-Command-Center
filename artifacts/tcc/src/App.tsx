@@ -204,6 +204,40 @@ export default function App() {
   // Refetches all sections raw. Emails are POLLED (not reclassified). If AI
   // is stale (>6h), reclassification kicks off automatically. Otherwise new
   // emails surface via the banner.
+  //
+  // Also: pollEmailStatus runs on tab focus so the banner reflects DB truth
+  // shortly after the 6h server-side cron completes (Bug 6) without waiting
+  // for the 15-min interval.
+  const pollEmailStatus = useCallback(async () => {
+    try {
+      const res = await post<{ ok: boolean; newCount: number; newEmails: { from: string; subject: string; snippet: string; messageId: string }[]; aiProcessedAt: string | null; aiStale: boolean }>("/brief/emails/poll", {});
+      if (res?.aiStale) {
+        // AI hasn't run in >6h — reclassify automatically. This also clears
+        // newEmailCount inside reclassifyEmailsNow.
+        await reclassifyEmailsNow();
+        return;
+      }
+      if (res?.newCount > 0) {
+        // Append new emails to banner queue (de-dupe by messageId).
+        setPendingNewEmails(prev => {
+          const seen = new Set(prev.map(p => p.messageId));
+          const fresh = res.newEmails.filter(n => !seen.has(n.messageId));
+          const next = [...prev, ...fresh];
+          // Banner count is the size of the de-duped queue, not a running
+          // sum — otherwise repeated polls inflate the count past reality.
+          setNewEmailCount(next.length);
+          return next;
+        });
+      } else {
+        // No new emails on the server (either nothing arrived OR the 6h cron
+        // just classified them all). Drop the banner so it doesn't sit there
+        // claiming "13 new" forever after auto-reclassify completes.
+        setNewEmailCount(0);
+        setPendingNewEmails([]);
+      }
+    } catch { /* silent */ }
+  }, [reclassifyEmailsNow]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -217,28 +251,22 @@ export default function App() {
         post<{ ok: boolean }>("/brief/slack/refetch", {}).then(() => loadSlack()),
       ]).catch(() => {});
 
-      // Email poll — check for new arrivals + AI freshness
-      try {
-        const res = await post<{ ok: boolean; newCount: number; newEmails: { from: string; subject: string; snippet: string; messageId: string }[]; aiProcessedAt: string | null; aiStale: boolean }>("/brief/emails/poll", {});
-        if (cancelled) return;
-        if (res?.aiStale) {
-          // AI hasn't run in >6h — reclassify automatically
-          await reclassifyEmailsNow();
-        } else if (res?.newCount > 0) {
-          // Append new emails to banner queue
-          setNewEmailCount(prev => prev + res.newCount);
-          setPendingNewEmails(prev => {
-            const seen = new Set(prev.map(p => p.messageId));
-            const fresh = res.newEmails.filter(n => !seen.has(n.messageId));
-            return [...prev, ...fresh];
-          });
-        }
-      } catch { /* silent */ }
+      if (cancelled) return;
+      await pollEmailStatus();
     };
 
     const interval = setInterval(tick, 15 * 60 * 1000);
-    return () => { cancelled = true; clearInterval(interval); };
-  }, [loadCalendar, loadLinear, loadSlack, reclassifyEmailsNow]);
+
+    // Tab focus → quick poll so the banner clears soon after cron auto-reclassify.
+    const onFocus = () => { if (!cancelled) pollEmailStatus(); };
+    window.addEventListener("focus", onFocus);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [loadCalendar, loadLinear, loadSlack, pollEmailStatus]);
 
   const [showReclassifyModal, setShowReclassifyModal] = useState(false);
   const openReclassifyModal = () => setShowReclassifyModal(true);
@@ -252,14 +280,27 @@ export default function App() {
       if (mode === "custom") body.sinceUnixSeconds = sinceUnixSeconds;
       const res = await post<{ ok: boolean; emailsImportant?: any[]; emailsFyi?: any[]; emailsPromotions?: any[] }>("/emails/reclassify", body);
       if (res?.ok) {
-        // Refresh the section cache from the new endpoint so timestamps stay correct
+        // Optimistically update brief state from the response so the badge
+        // count + email lists re-derive immediately (Bug 7). Then reload from
+        // the section cache to keep timestamps aligned.
+        if (res.emailsImportant || res.emailsFyi || res.emailsPromotions) {
+          setBrief(prev => ({
+            ...(prev ?? {} as DailyBrief),
+            emailsImportant: res.emailsImportant ?? prev?.emailsImportant ?? [],
+            emailsFyi: res.emailsFyi ?? prev?.emailsFyi ?? [],
+            emailsPromotions: res.emailsPromotions ?? prev?.emailsPromotions ?? [],
+          }));
+        }
         await loadEmails();
       }
+      // Banner state cleared on every modal-submit path (Bug 6).
       setNewEmailCount(0);
       setPendingNewEmails([]);
       setShowReclassifyModal(false);
     } catch {
       await loadEmails(true);
+      setNewEmailCount(0);
+      setPendingNewEmails([]);
       setShowReclassifyModal(false);
     }
     setReclassifying(false);

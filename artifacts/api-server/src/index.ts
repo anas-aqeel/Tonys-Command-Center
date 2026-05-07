@@ -33,6 +33,9 @@ const server = app.listen(port, () => {
 
     // Start demo feedback scanner (runs hourly between 9 AM – 6 PM Pacific)
     startDemoFeedbackScanner();
+
+    // Start email auto-reclassify (runs every 6 hours, reclassifies last 24h)
+    startEmailReclassifyScheduler();
   }
 });
 
@@ -95,6 +98,34 @@ function startBusinessPlanIngest(): void {
       logger.warn({ err }, "Business plan ingest scheduler: error during check");
     }
   }, 5 * 60 * 1000); // check every 5 minutes
+}
+
+// ── Email auto-reclassify — runs every 6 hours ───────────────────────────────
+// Reclassifies the last 24h of emails on a 6h cadence so the inbox triage
+// stays current even when Tony isn't actively clicking "Reclassify". Reuses
+// the same agent_email_triage runtime path the live UI uses, so each run
+// logs to ai_usage_logs the same way.
+function startEmailReclassifyScheduler(): void {
+  const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+  logger.info("Email reclassify scheduler started — runs every 6 hours");
+
+  const tick = async () => {
+    try {
+      const { reclassifyRecentEmails } = await import("./routes/tcc/brief");
+      const result = await reclassifyRecentEmails({ hoursBack: 24 });
+      if (result.ok) {
+        logger.info({ classified: result.classified }, "Email reclassify scheduler: completed");
+      } else {
+        logger.warn({ error: result.error }, "Email reclassify scheduler: failed");
+      }
+    } catch (err) {
+      logger.warn({ err }, "Email reclassify scheduler: error during run");
+    }
+  };
+
+  // Fire once shortly after boot (give the server 60s to stabilize), then every 6h.
+  setTimeout(tick, 60 * 1000);
+  setInterval(tick, SIX_HOURS_MS);
 }
 
 // ── Demo feedback scanner — runs hourly between 9 AM – 6 PM Pacific ──────────

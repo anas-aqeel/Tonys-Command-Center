@@ -106,8 +106,10 @@ router.post("/eod-report/preview", async (req, res): Promise<void> => {
 router.post("/eod-report", async (req, res): Promise<void> => {
   const today = todayPacific();
 
-  // If body text + recipient provided, use them directly; otherwise generate
-  const { to: customTo, body: customBody } = req.body ?? {};
+  // If body text + recipient provided, use them directly; otherwise generate.
+  // `subject` is optional — falls back to the canonical EOD subject so the
+  // email never lands without one (Bug 14).
+  const { to: customTo, body: customBody, subject: customSubject } = req.body ?? {};
 
   let reportText: string;
   let callsMade: number;
@@ -132,11 +134,14 @@ router.post("/eod-report", async (req, res): Promise<void> => {
   }
 
   const recipients: string[] = customTo ? [customTo] : ["tony@flipiq.com"];
+  const subject = (typeof customSubject === "string" && customSubject.trim())
+    ? customSubject.trim()
+    : `EOD Report — ${today}`;
   const sentResults = await Promise.all(
     recipients.map(async to => {
       const result = await sendEmail({
         to,
-        subject: `FlipIQ EOD Report — ${today}`,
+        subject,
         body: reportText,
       });
       if (!result.ok) req.log.warn({ to }, "Gmail EOD send failed");

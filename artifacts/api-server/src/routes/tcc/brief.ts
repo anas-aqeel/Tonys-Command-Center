@@ -139,7 +139,7 @@ function fixUnescapedJsonQuotes(json: string): string {
 
 // ─── Live Gmail fetch via Replit google-mail connector ────────────────────────
 
-async function fetchLiveEmails(): Promise<{ important: EmailImportant[]; fyi: EmailFyi[]; promotions: EmailPromotion[] } | null> {
+export async function fetchLiveEmails(): Promise<{ important: EmailImportant[]; fyi: EmailFyi[]; promotions: EmailPromotion[] } | null> {
   try {
     const gmail = await getGmail();
     const since = Math.floor((Date.now() - 48 * 60 * 60 * 1000) / 1000);
@@ -233,8 +233,11 @@ Promotions shape: { "from": string, "subj": string, "why": string }`,
       }
     }
 
-    // Attach gmailMessageId by matching back to the original message list
-    const attachMsgId = (e: EmailImportant): EmailImportant => {
+    // Attach gmailMessageId by matching back to the original message list.
+    // Applied to all three buckets so the poll endpoint's `seenIds` set covers
+    // every classified email — otherwise FYI/promotions keep re-surfacing as
+    // "new", which keeps the reclassify banner permanently visible (Bug 6).
+    const attachMsgId = <T extends { from: string; subj: string }>(e: T): T & { gmailMessageId?: string } => {
       const key = e.from.toLowerCase().slice(0, 30) + "|" + e.subj.toLowerCase().slice(0, 40);
       const gmailMessageId = msgIdMap.get(key);
       return gmailMessageId ? { ...e, gmailMessageId } : e;
@@ -242,8 +245,8 @@ Promotions shape: { "from": string, "subj": string, "why": string }`,
 
     return {
       important: (parsed.important || []).slice(0, 8).map((e, i) => attachMsgId({ ...e, id: i + 1 })),
-      fyi: (parsed.fyi || []).slice(0, 5).map((e, i) => ({ ...e, id: i + 10 })),
-      promotions: (parsed.promotions || []).slice(0, 10).map((e, i) => ({ ...e, id: i + 20 })),
+      fyi: (parsed.fyi || []).slice(0, 5).map((e, i) => attachMsgId({ ...e, id: i + 10 })),
+      promotions: (parsed.promotions || []).slice(0, 10).map((e, i) => attachMsgId({ ...e, id: i + 20 })),
     };
   } catch (err) {
     console.warn("[brief] Gmail live fetch failed:", err instanceof Error ? err.message : err);
@@ -822,7 +825,7 @@ async function readCache(section: SectionName): Promise<{
   }
 }
 
-async function writeCache(
+export async function writeCache(
   section: SectionName,
   data: unknown,
   opts: { bumpAi?: boolean } = {}
@@ -991,14 +994,19 @@ router.post("/brief/slack/refetch", async (_req, res): Promise<void> => {
 // banner. Also auto-decides if AI is stale (>6h) — caller can use this hint.
 router.post("/brief/emails/poll", async (_req, res): Promise<void> => {
   const cached = await readCache("emails");
-  const cachedData = (cached?.data as { important?: EmailImportant[]; fyi?: EmailFyi[] }) ?? { important: [], fyi: [] };
+  const cachedData = (cached?.data as {
+    important?: EmailImportant[];
+    fyi?: (EmailFyi & { gmailMessageId?: string })[];
+    promotions?: (EmailPromotion & { gmailMessageId?: string })[];
+  }) ?? { important: [], fyi: [], promotions: [] };
 
-  // Build set of already-classified gmail IDs
+  // Build set of already-classified gmail IDs across all three buckets so a
+  // classified FYI/promotion doesn't keep coming back as "new" on the next
+  // poll — that's what kept the blue reclassify banner stuck on screen.
   const seenIds = new Set<string>();
   for (const e of (cachedData.important ?? [])) if (e.gmailMessageId) seenIds.add(e.gmailMessageId);
-  for (const e of (cachedData.fyi ?? [])) if ((e as { gmailMessageId?: string }).gmailMessageId) {
-    seenIds.add((e as { gmailMessageId?: string }).gmailMessageId!);
-  }
+  for (const e of (cachedData.fyi ?? [])) if (e.gmailMessageId) seenIds.add(e.gmailMessageId);
+  for (const e of (cachedData.promotions ?? [])) if (e.gmailMessageId) seenIds.add(e.gmailMessageId);
 
   let newEmails: { from: string; subject: string; snippet: string; messageId: string; date: string }[] = [];
   try {
@@ -1207,5 +1215,34 @@ ${engagementNote}`;
     res.json({ anchor: "Today is a new day. Start with your 10 calls — that's the North Star.", perfSummary: "" });
   }
 });
+
+// Re-runs the triage skill on emails in the past `hoursBack` hours and writes
+// the resulting classification to the section_cache (bumps ai_processed_at).
+// Reused by the 6h cron job and the manual /brief/emails/reclassify route.
+// `hoursBack` is informational — fetchLiveEmails already pulls the last 48h
+// window — but we expose it for symmetry with the cron's contract.
+export async function reclassifyRecentEmails(opts: { hoursBack?: number } = {}): Promise<{
+  ok: boolean;
+  classified?: { important: number; fyi: number; promotions: number };
+  error?: string;
+}> {
+  const hoursBack = opts.hoursBack ?? 24;
+  try {
+    const live = await fetchLiveEmails();
+    if (!live) return { ok: false, error: "fetchLiveEmails returned null" };
+    await writeCache("emails", live, { bumpAi: true });
+    console.log(`[reclassifyRecentEmails] hoursBack=${hoursBack} important=${live.important.length} fyi=${live.fyi.length} promotions=${live.promotions.length}`);
+    return {
+      ok: true,
+      classified: {
+        important: live.important.length,
+        fyi: live.fyi.length,
+        promotions: live.promotions.length,
+      },
+    };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
 
 export default router;

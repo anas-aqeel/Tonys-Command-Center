@@ -122,6 +122,13 @@ export function Header({ clock, ideas, unresolved, snoozedCount = 0, calSide, eo
   const [showEodModal, setShowEodModal] = useState(false);
   const [eodText, setEodText] = useState("");
   const [eodTo, setEodTo] = useState("ethan@flipiq.com");
+  // Default EOD subject — canonical "EOD Report — YYYY-MM-DD" in Pacific.
+  // Editable in the modal so Tony can override before sending (Bug 14).
+  const [eodSubject, setEodSubject] = useState(() => {
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
+    return `EOD Report — ${today}`;
+  });
+  const [eodSubjectEditing, setEodSubjectEditing] = useState(false);
   const [eodLoading, setEodLoading] = useState(false);
   const [eodSending, setEodSending] = useState(false);
   const [eodResult, setEodResult] = useState<{ ok: boolean; msg: string } | null>(null);
@@ -147,7 +154,11 @@ export function Header({ clock, ideas, unresolved, snoozedCount = 0, calSide, eo
     setEodSending(true);
     setEodResult(null);
     try {
-      const r = await post<{ ok: boolean }>("/eod-report", { to: eodTo.trim(), body: eodText });
+      const r = await post<{ ok: boolean }>("/eod-report", {
+        to: eodTo.trim(),
+        body: eodText,
+        subject: eodSubject.trim(),
+      });
       if (r.ok) {
         setEodResult({ ok: true, msg: `Sent to ${eodTo.trim()}` });
         onEod();
@@ -159,7 +170,7 @@ export function Header({ clock, ideas, unresolved, snoozedCount = 0, calSide, eo
     } finally {
       setEodSending(false);
     }
-  }, [eodSending, eodTo, eodText, onEod]);
+  }, [eodSending, eodTo, eodText, eodSubject, onEod]);
   const menuRef = useRef<HTMLDivElement>(null);
   const slackPopoverRef = useRef<HTMLDivElement>(null);
   const handleDismissSlackPopover = useCallback(() => setShowSlackPopover(false), []);
@@ -505,6 +516,29 @@ export function Header({ clock, ideas, unresolved, snoozedCount = 0, calSide, eo
                 placeholder="ethan@flipiq.com"
                 style={{ width: "100%", padding: "9px 12px", fontSize: 13, border: "1px solid #DDD", borderRadius: 8, fontFamily: F, boxSizing: "border-box" }}
               />
+            </div>
+
+            {/* Subject field — read-only by default, click to edit (Bug 14) */}
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#888", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 5 }}>Subject</div>
+              {eodSubjectEditing ? (
+                <input
+                  autoFocus
+                  value={eodSubject}
+                  onChange={e => setEodSubject(e.target.value)}
+                  onBlur={() => setEodSubjectEditing(false)}
+                  onKeyDown={e => { if (e.key === "Enter" || e.key === "Escape") setEodSubjectEditing(false); }}
+                  style={{ width: "100%", padding: "9px 12px", fontSize: 13, border: "1px solid #2563EB", borderRadius: 8, fontFamily: F, boxSizing: "border-box" }}
+                />
+              ) : (
+                <div
+                  onClick={() => setEodSubjectEditing(true)}
+                  title="Click to edit subject"
+                  style={{ width: "100%", padding: "9px 12px", fontSize: 13, border: "1px solid #DDD", borderRadius: 8, fontFamily: F, boxSizing: "border-box", cursor: "text", color: "#374151", background: "#FAFAFA" }}
+                >
+                  {eodSubject || <span style={{ color: "#999" }}>Click to set subject</span>}
+                </div>
+              )}
             </div>
 
             {/* Report body */}
