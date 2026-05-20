@@ -373,8 +373,10 @@ router.post("/emails/reclassify", async (req, res): Promise<void> => {
       emailsPromotions: resultPromotions,
     });
   } catch (err) {
-    console.warn("[EmailReclassify] failed:", err instanceof Error ? err.message : err);
-    res.status(500).json({ error: "Reclassify failed" });
+    const msg = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? err.stack : undefined;
+    console.warn("[EmailReclassify] failed:", msg, stack);
+    res.status(500).json({ error: "Reclassify failed", detail: msg.slice(0, 500), stack: stack?.split("\n").slice(0, 6).join(" | ") });
   }
 });
 
