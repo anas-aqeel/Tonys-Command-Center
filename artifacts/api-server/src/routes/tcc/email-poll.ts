@@ -26,11 +26,24 @@ Promotions shape: { "from": string, "subj": string, "why": string }`;
 
 // Calls Claude (or runAgent when flag is on) and returns the classification JSON object.
 // Both branches use the same model/max_tokens for byte-equivalence.
+// v2 email/triage skill prompt emits {sender, subject, one_line_summary, ...}; legacy
+// callers expect {from, subj, why, time?, p?}. We normalize at this single chokepoint
+// so downstream code (attachId, FE) keeps the legacy contract.
+function normalizeTriageItem(e: any): any {
+  return {
+    ...e,
+    from: e.from ?? e.sender ?? "",
+    subj: e.subj ?? e.subject ?? "",
+    why: e.why ?? e.one_line_summary ?? e.suggested_action ?? "",
+  };
+}
 async function classifyEmailsViaAi(userPrompt: string, opType: "poll" | "reclassify"): Promise<{ important?: any[]; fyi?: any[]; promotions?: any[] } | null> {
   let raw = "";
   if (isAgentRuntimeEnabled("email")) {
+    // Append explicit shape so the v2 skill's default ThreadSummary schema doesn't override the caller's contract.
+    const shapeHint = `\n\nReturn ONLY JSON: { "important":[...], "fyi":[...], "promotions":[...] }\nEach item: { "from": string, "subj": string, "why": string, "time": string, "p": "high"|"med"|"low" } (time and p only for important).`;
     const result = await runAgent("email", "triage", {
-      userMessage: userPrompt,
+      userMessage: userPrompt + shapeHint,
       caller: "direct",
       meta: { opType },
     });
@@ -48,7 +61,12 @@ async function classifyEmailsViaAi(userPrompt: string, opType: "poll" | "reclass
   }
   const jsonMatch = raw.match(/\{[\s\S]*\}/);
   if (!jsonMatch) return null;
-  return JSON.parse(jsonMatch[0]);
+  const parsed = JSON.parse(jsonMatch[0]);
+  return {
+    important: (parsed.important || []).map(normalizeTriageItem),
+    fyi: (parsed.fyi || []).map(normalizeTriageItem),
+    promotions: (parsed.promotions || []).map(normalizeTriageItem),
+  };
 }
 
 router.get("/emails/poll", async (req, res): Promise<void> => {
