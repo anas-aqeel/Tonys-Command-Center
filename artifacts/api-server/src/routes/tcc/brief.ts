@@ -180,8 +180,16 @@ export async function fetchLiveEmails(): Promise<{ important: EmailImportant[]; 
       if (msgId) msgIdMap.set(key, msgId);
     }
 
-    // Triage via runAgent (flag) or legacy inline prompt
-    const userPrompt = `Classify these emails:\n${JSON.stringify(rawEmails, null, 2)}`;
+    // Triage via runAgent (flag) or legacy inline prompt.
+    // Force the legacy {from, subj, why} shape — the v2 skill prompt defaults to
+    // {sender, subject, one_line_summary}, which the morning-brief FE can't render.
+    // The post-parse normalize() handles either shape, but being explicit cuts a tier.
+    const userPrompt = `Classify these emails into important / fyi / promotions:
+${JSON.stringify(rawEmails, null, 2)}
+
+Return ONLY JSON: { "important": [...], "fyi": [...], "promotions": [...] }
+Each item shape: { "from": string, "subj": string, "why": string, "time": string, "p": "high"|"med"|"low" }
+(time = friendly "Today"/"Yesterday"/short date; p only used for important; fyi/promotions can omit time and p)`;
     let raw = "";
     if (isAgentRuntimeEnabled("email")) {
       const result = await runAgent("email", "triage", {
@@ -218,7 +226,7 @@ Promotions shape: { "from": string, "subj": string, "why": string }`,
       return null;
     }
 
-    let parsed: { important?: EmailImportant[]; fyi?: EmailFyi[]; promotions?: EmailPromotion[] };
+    let parsed: any;
     try {
       parsed = JSON.parse(jsonMatch[0]);
     } catch {
@@ -233,6 +241,17 @@ Promotions shape: { "from": string, "subj": string, "why": string }`,
       }
     }
 
+    // v2 email/triage skill emits {sender, subject, one_line_summary, has_explicit_ask, suggested_action}.
+    // Legacy shape (still expected by the FE morning brief) is {from, subj, why, time?, p?}.
+    // Normalize either input to the legacy shape so the endpoint contract stays stable.
+    const normalize = (e: any): { from: string; subj: string; why: string; time?: string; p?: string } => ({
+      from: e.from ?? e.sender ?? "",
+      subj: e.subj ?? e.subject ?? "",
+      why: e.why ?? e.one_line_summary ?? e.suggested_action ?? "",
+      ...(e.time !== undefined ? { time: e.time } : {}),
+      ...(e.p !== undefined ? { p: e.p } : {}),
+    });
+
     // Attach gmailMessageId by matching back to the original message list.
     // Applied to all three buckets so the poll endpoint's `seenIds` set covers
     // every classified email — otherwise FYI/promotions keep re-surfacing as
@@ -244,9 +263,9 @@ Promotions shape: { "from": string, "subj": string, "why": string }`,
     };
 
     return {
-      important: (parsed.important || []).slice(0, 8).map((e, i) => attachMsgId({ ...e, id: i + 1 })),
-      fyi: (parsed.fyi || []).slice(0, 5).map((e, i) => attachMsgId({ ...e, id: i + 10 })),
-      promotions: (parsed.promotions || []).slice(0, 10).map((e, i) => attachMsgId({ ...e, id: i + 20 })),
+      important: (parsed.important || []).slice(0, 8).map((e: any, i: number) => attachMsgId({ ...normalize(e), id: i + 1, time: e.time ?? "", p: e.p ?? "med" } as EmailImportant)),
+      fyi: (parsed.fyi || []).slice(0, 5).map((e: any, i: number) => attachMsgId({ ...normalize(e), id: i + 10 } as EmailFyi)),
+      promotions: (parsed.promotions || []).slice(0, 10).map((e: any, i: number) => attachMsgId({ ...normalize(e), id: i + 20 } as EmailPromotion)),
     };
   } catch (err) {
     console.warn("[brief] Gmail live fetch failed:", err instanceof Error ? err.message : err);
