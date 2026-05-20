@@ -46,12 +46,15 @@ async function classifyEmailsViaAi(userPrompt: string, opType: "poll" | "reclass
       userMessage: userPrompt + shapeHint,
       caller: "direct",
       meta: { opType },
+      // 30-email batches blow past the skill's default budget; cap output at 4k
+      // so truncated JSON doesn't crash the parse below.
+      maxTokensOverride: 4096,
     });
     raw = result.text;
   } else {
     const claudeResponse = await createTrackedMessage(opType === "poll" ? "email_poll" : "email_poll_reclassify", {
       model: "claude-haiku-4-5",
-      max_tokens: 1024,
+      max_tokens: 4096,
       system: TRIAGE_SYSTEM_PROMPT,
       messages: [{ role: "user", content: userPrompt }],
     });
@@ -59,9 +62,22 @@ async function classifyEmailsViaAi(userPrompt: string, opType: "poll" | "reclass
     if (!textBlock || textBlock.type !== "text") return null;
     raw = textBlock.text;
   }
-  const jsonMatch = raw.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) return null;
-  const parsed = JSON.parse(jsonMatch[0]);
+  // Strip markdown fence if present (v2 skills sometimes wrap output in ```json).
+  let stripped = raw.trim().replace(/^```(?:json)?\s*\n?/i, "");
+  const fenceEnd = stripped.indexOf("```");
+  if (fenceEnd >= 0) stripped = stripped.slice(0, fenceEnd);
+  const jsonMatch = stripped.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    console.warn("[classifyEmailsViaAi] no JSON in response. First 400 chars:", raw.slice(0, 400));
+    return null;
+  }
+  let parsed: any;
+  try {
+    parsed = JSON.parse(jsonMatch[0]);
+  } catch (e) {
+    console.warn("[classifyEmailsViaAi] JSON.parse failed:", e instanceof Error ? e.message : e, "· raw len:", raw.length);
+    return null;
+  }
   return {
     important: (parsed.important || []).map(normalizeTriageItem),
     fyi: (parsed.fyi || []).map(normalizeTriageItem),

@@ -49,10 +49,36 @@ router.post("/journal", async (req, res): Promise<void> => {
     // Flag-gated: AGENT_RUNTIME_JOURNAL=true routes through runtime;
     // default false keeps legacy inline prompt intact.
     if (isAgentRuntimeEnabled("journal")) {
+      // v2 journal/format-entry skill is designed as a "save + confirm" tool-using
+      // agent and returns just "Entry saved. <date>." by default. This route still
+      // needs the legacy formatted markdown (Mood / Key Events / Reflection
+      // sections) for downstream regex extraction + DB save, so spell the
+      // expected output explicitly in the user prompt.
       const userMessage = `Today is ${todayDate}.
 
 Raw entry:
-${rawText}`;
+${rawText}
+
+Do NOT call any save tools. Just output the formatted entry as markdown in EXACTLY this structure (start with \`### Daily Journal Entry — ${todayDate}\`):
+
+### Daily Journal Entry — ${todayDate}
+
+**Mood:**
+[2-4 emotion words extracted from content]
+
+**Key Events:**
+[Bullet points of what happened, who he talked to, decisions made]
+
+**Physical/Health Notes:**
+[Extracted from content. If nothing mentioned: "No specific health concerns noted today."]
+
+**Reflection:**
+[1-2 paragraph reflection connecting content to growth themes, PSI principles, and spiritual journey. Written in second or third person analytical voice, NOT Tony's voice.]
+
+---
+
+**Original Entry (cleaned up):**
+[Tony's raw voice-to-text, cleaned for readability — fix grammar, remove filler words, but keep his voice and meaning]`;
 
       const result = await runAgent("journal", "format-entry", {
         userMessage,

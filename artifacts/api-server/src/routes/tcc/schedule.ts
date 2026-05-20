@@ -113,7 +113,15 @@ Return ONLY the JSON, no markdown.`
     }
 
     const parsed = JSON.parse(raw.trim().replace(/^```json?\n?/, "").replace(/\n?```$/, ""));
-    return { inScope: parsed.inScope ?? true, category: parsed.category ?? "Other", warning: parsed.warning };
+    // v2 schedule/check-scope skill emits {scope, warning}; legacy shape is {inScope, category, warning}.
+    // Map v2 scope (sales|ops|personal|other) → legacy category (Sales|CSM|COO|Other) and derive inScope.
+    const SCOPE_TO_CATEGORY: Record<string, "Sales" | "CSM" | "COO" | "Other"> = {
+      sales: "Sales", ops: "CSM", personal: "Other", other: "Other",
+    };
+    const v2Scope = typeof parsed.scope === "string" ? parsed.scope.toLowerCase() : null;
+    const category = parsed.category ?? (v2Scope ? SCOPE_TO_CATEGORY[v2Scope] ?? "Other" : "Other");
+    const inScope = parsed.inScope ?? (category !== "Other" || !parsed.warning);
+    return { inScope, category, warning: parsed.warning };
   } catch {
     return { inScope: true, category: "Other" }; // fail open
   }

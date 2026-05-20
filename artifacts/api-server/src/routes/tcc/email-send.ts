@@ -155,11 +155,13 @@ Keep the body to 3-5 sentences max.`;
     // Flag-gated: AGENT_RUNTIME_EMAIL=true routes through runtime;
     // default false keeps legacy inline prompt intact.
     if (isAgentRuntimeEnabled("email")) {
-      // Runtime path: send only dynamic data — voice/format instructions live
-      // in the skill body. JSON output format is in the skill body too.
+      // Runtime path: send only dynamic data — voice/format instructions live in
+      // the skill body. v2 compose-new emits prose with a "Subject:" first line
+      // by default; this route expects JSON {"subject", "body"}, so spell the
+      // contract in the user message instead of relying on the skill default.
       const runtimeMessage = replyToSnippet
-        ? `REPLY context — Recipient: ${recipient}\nOriginal subject: "${subject || "No subject"}"\nOriginal snippet: "${replyToSnippet}"${context ? `\nContext: ${context}` : ""}`
-        : `NEW email — Recipient: ${recipient}${subject ? `\nSubject hint: "${subject}"` : ""}${context ? `\nContext: ${context}` : ""}`;
+        ? `REPLY context. Recipient: ${recipient}\nOriginal subject: "${subject || "No subject"}"\nOriginal snippet: "${replyToSnippet}"${context ? `\nContext: ${context}` : ""}\n\nReturn ONLY JSON: {"subject":"<subject>","body":"<body — use \\n for line breaks, do NOT include a signature>"}`
+        : `NEW email. Recipient: ${recipient}${subject ? `\nSubject hint: "${subject}"` : ""}${context ? `\nContext: ${context}` : ""}\n\nReturn ONLY JSON: {"subject":"<subject>","body":"<body — use \\n for line breaks, do NOT include a signature>"}`;
 
       const result = await runAgent("email", "compose-new", {
         userMessage: runtimeMessage,
