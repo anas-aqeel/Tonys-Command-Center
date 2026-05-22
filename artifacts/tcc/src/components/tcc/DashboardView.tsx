@@ -1169,10 +1169,22 @@ export function DashboardView({ tasks, tDone, calendarData, emailsImportant, lin
                   const done = t.status === "completed" || ck(id);
                   const CAT_COLOR: Record<string, string> = { adaptation: "#B45309", sales: "#3B6D11", tech: "#185FA5", capital: "#5B3FA0", team: "#5F5E5A" };
                   const catColor = CAT_COLOR[t.category] || "#888";
+                  // C9 (Tony's 2026-05-16): show the actual priority badge.
+                  // Previously hardcoded "P0" but C2 made Top 3 fall back to
+                  // P1 / P2 when not enough P0s exist; the badge must match.
+                  const pri = (t.priority || "P0").toUpperCase();
+                  const priColor = pri === "P0" ? { fg: "#B91C1C", bg: "#FEE2E2" }
+                                : pri === "P1" ? { fg: "#B45309", bg: "#FEF3C7" }
+                                : pri === "P2" ? { fg: "#1D4ED8", bg: "#DBEAFE" }
+                                : { fg: "#555", bg: "#EEE" };
+                  // C9: format due date for the row meta line.
+                  const dueLabel = t.dueDate
+                    ? new Date(t.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+                    : null;
                   return (
                     <div key={id} className="dash-row-hover" style={{
                       display: "flex", gap: 10, alignItems: "flex-start",
-                      padding: "8px 10px", borderBottom: "1px solid #EBEBEB",
+                      padding: "9px 10px", borderBottom: "1px solid #EBEBEB",
                       background: i === 0 ? "#FFFBF2" : "#fff", transition: "background 0.15s",
                     }}>
                       <CB id={id} checked={done} onToggle={async () => {
@@ -1201,11 +1213,12 @@ export function DashboardView({ tasks, tDone, calendarData, emailsImportant, lin
                         <div style={{ fontSize: 13, fontWeight: i === 0 ? 700 : 600, color: done ? "#bbb" : BLK, textDecoration: done ? "line-through" : "none", lineHeight: 1.4 }}>
                           {t.title}
                         </div>
-                        <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 2 }}>
+                        <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 3, flexWrap: "wrap" }}>
+                          <span style={{ fontSize: 9, fontWeight: 800, color: priColor.fg, background: priColor.bg, borderRadius: 3, padding: "0 5px" }}>{pri}</span>
                           {t.sprintId && <span style={{ fontSize: 9, fontWeight: 800, color: catColor, background: catColor + "18", borderRadius: 4, padding: "1px 5px", fontFamily: "monospace" }}>{t.sprintId}</span>}
                           {t.subcategory && <span style={{ fontSize: 9, color: "#aaa" }}>{t.subcategory}</span>}
                           {t.owner && <span style={{ fontSize: 9, color: catColor, fontWeight: 700 }}>{t.owner}</span>}
-                          <span style={{ fontSize: 9, fontWeight: 800, color: "#B91C1C", background: "#FEE2E2", borderRadius: 3, padding: "0 4px" }}>P0</span>
+                          {dueLabel && <span style={{ fontSize: 9, color: "#666", fontWeight: 700 }}>· due {dueLabel}</span>}
                         </div>
                       </div>
                     </div>
