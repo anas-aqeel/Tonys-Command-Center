@@ -41,13 +41,19 @@ export function ConnectedCallModal({ open, onClose, contactId, contactName, cont
     setSaving(true);
     setError("");
     try {
-      await post("/calls/connected-outcome", {
-        contactId,
-        contactName,
-        outcomeNotes,
-        nextStep: nextStep || undefined,
-        followUpDate: followUpDate || undefined,
-      });
+      // BE now returns an AI-drafted follow-up so the compose modal opens
+      // prefilled (Tony's 2026-05-16 ask: "make sure this information is
+      // preloaded so I don't have to come back and refill it").
+      const resp = await post<{ ok: boolean; followUpText?: string | null }>(
+        "/calls/connected-outcome",
+        {
+          contactId,
+          contactName,
+          outcomeNotes,
+          nextStep: nextStep || undefined,
+          followUpDate: followUpDate || undefined,
+        },
+      );
       setSaved(true);
 
       setTimeout(() => {
@@ -56,7 +62,7 @@ export function ConnectedCallModal({ open, onClose, contactId, contactName, cont
           onFollowUpEmail({
             to: contactEmail,
             subject: `Following up - ${contactName}`,
-            body: "",
+            body: resp?.followUpText || "",
             contactId,
             contactName,
           });

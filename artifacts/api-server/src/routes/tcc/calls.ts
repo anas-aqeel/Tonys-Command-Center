@@ -153,7 +153,50 @@ router.post("/calls/connected-outcome", async (req, res): Promise<void> => {
       });
     }
 
-    res.json({ ok: true });
+    // Generate an AI follow-up draft using the call outcome so the email-compose
+    // modal opens prefilled (Tony's 2026-05-16 feedback: "make sure this
+    // information is preloaded so I don't have to come back and refill it").
+    // Best-effort — if the draft fails, the route still returns ok with no draft.
+    let followUpText: string | null = null;
+    try {
+      const firstName = contactName.split(/\s+/)[0];
+      const runtimeMessage = `Connected call with ${contactName} (first name: ${firstName}).
+
+Outcome notes: ${outcomeNotes}
+${nextStep ? `Next step: ${nextStep}` : ""}
+${followUpDate ? `Follow-up date: ${followUpDate}` : ""}
+
+Draft a short follow-up email recapping the call and confirming the next step. Use the contact's actual first name (${firstName}) — NEVER write placeholder tokens like {firstName} or {name}. Plain text only, no subject line, no signature (Tony's email signature is appended automatically).`;
+
+      if (isAgentRuntimeEnabled("calls")) {
+        const result = await runAgent("calls", "follow-up-draft", {
+          userMessage: runtimeMessage,
+          caller: "direct",
+          meta: { contactName, callType: "connected", contactId },
+        });
+        followUpText = result.text.trim() || null;
+      } else {
+        const msg = await createTrackedMessage("call_connected_follow_up", {
+          model: "claude-haiku-4-5",
+          max_tokens: 1024,
+          messages: [{ role: "user", content: runtimeMessage }],
+        });
+        const block = msg.content.find(b => b.type === "text");
+        followUpText = (block?.type === "text" ? block.text.trim() : null) || null;
+      }
+
+      // Defense in depth: strip any placeholder tokens that slipped through.
+      if (followUpText) {
+        followUpText = followUpText
+          .replace(/\{first[_]?name\}/gi, firstName)
+          .replace(/\{name\}/gi, contactName)
+          .replace(/\{fullName\}/gi, contactName);
+      }
+    } catch (err) {
+      req.log.warn({ err }, "Connected-call follow-up draft generation failed");
+    }
+
+    res.json({ ok: true, followUpText });
   } catch (err) {
     req.log.error({ err }, "Connected call outcome logging failed");
     res.status(500).json({ error: "Failed to log connected call outcome" });
