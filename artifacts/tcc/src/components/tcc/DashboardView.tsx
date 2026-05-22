@@ -1412,7 +1412,15 @@ export function DashboardView({ tasks, tDone, calendarData, emailsImportant, lin
               {(() => {
                 const callsDone = calls.length;
                 const callWin = callsDone >= 10;
-                const apptCount = meetings.length;
+                // B7 (Tony's 2026-05-16): only count real sales appointments,
+                // NOT follow-up reminders. The backend now tags follow-up
+                // GCal events with "Follow up:" prefix and sales appointments
+                // with "Sales appt:" prefix when scheduled via the connected
+                // call modal. Pre-existing manual calendar events without
+                // either prefix are still counted (they could be real meetings).
+                const apptCount = meetings.filter(m =>
+                  !/^Follow up:/i.test(m.n || "")
+                ).length;
                 return (
                   <div style={{
                     display: "flex", alignItems: "center", gap: 10,

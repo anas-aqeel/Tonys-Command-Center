@@ -100,6 +100,10 @@ export const callLogTable = pgTable("call_log", {
   notes: text("notes"),
   followUpSent: boolean("follow_up_sent").default(false),
   followUpText: text("follow_up_text"),
+  // 'follow_up' (reminder only) | 'appointment' (sales meeting — counts in
+  // dashboard "appointments booked today"). Null on legacy rows. Tony's
+  // 2026-05-16 ask: distinguish so today's-wins counter is accurate.
+  followUpType: text("follow_up_type"),
   createdAt: timestamp("created_at").defaultNow(),
 }, (t) => [
   index("call_log_contact_id_idx").on(t.contactId),

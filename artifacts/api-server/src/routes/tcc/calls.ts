@@ -123,6 +123,10 @@ const ConnectedCallBody = z.object({
   outcomeNotes: z.string().min(1),
   nextStep: z.string().optional(),
   followUpDate: z.string().optional(),
+  // B7 (Tony's 2026-05-16 ask): distinguish a follow-up reminder from a real
+  // sales appointment so the dashboard's "appointments booked today" counter
+  // only counts true appointments. Default 'follow_up' for back-compat.
+  followUpType: z.enum(["follow_up", "appointment"]).optional(),
 });
 
 router.post("/calls/connected-outcome", async (req, res): Promise<void> => {
@@ -132,7 +136,10 @@ router.post("/calls/connected-outcome", async (req, res): Promise<void> => {
     return;
   }
 
-  const { contactId, contactName, outcomeNotes, nextStep, followUpDate } = parsed.data;
+  const { contactId, contactName, outcomeNotes, nextStep, followUpDate, followUpType } = parsed.data;
+  // Default to 'follow_up' so legacy clients that don't send the field keep
+  // their existing behavior (reminder, not counted as appointment).
+  const resolvedFollowUpType = followUpType ?? "follow_up";
 
   try {
     await db.insert(communicationLogTable).values({
@@ -143,6 +150,16 @@ router.post("/calls/connected-outcome", async (req, res): Promise<void> => {
       subject: "Connected call",
       summary: outcomeNotes.substring(0, 300),
       fullContent: [outcomeNotes, nextStep ? `Next step: ${nextStep}` : ""].filter(Boolean).join("\n"),
+    });
+
+    // Record the call attempt + the follow-up type so the dashboard "appointments
+    // booked today" counter can read it without going to GCal title parsing.
+    await db.insert(callLogTable).values({
+      contactId,
+      contactName,
+      type: "connected",
+      notes: outcomeNotes,
+      followUpType: followUpDate ? resolvedFollowUpType : null,
     });
 
     if (followUpDate) {
@@ -157,8 +174,15 @@ router.post("/calls/connected-outcome", async (req, res): Promise<void> => {
           updated_at = NOW()
       `);
 
+      // Distinct GCal title per type so the dashboard can filter:
+      //   appointment  → "Sales appt: <name>" (counts as a booked appointment)
+      //   follow_up    → "Follow up: <name>"  (reminder only)
+      const summary = resolvedFollowUpType === "appointment"
+        ? `Sales appt: ${contactName}`
+        : `Follow up: ${contactName}`;
+
       await createReminder({
-        summary: `Follow up: ${contactName}`,
+        summary,
         date: followUpDate,
         description: `${outcomeNotes}\n\nNext step: ${nextStep || "Follow up"}`,
       });
