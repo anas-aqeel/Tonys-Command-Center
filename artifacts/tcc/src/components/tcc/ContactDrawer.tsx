@@ -3,14 +3,16 @@ import { get, patch, post, del } from "@/lib/api";
 import { C, F, PC, PCBg, SC, PIPELINE_STAGES, LEAD_SOURCES, STATUS_OPTIONS, CONTACT_TYPES, CONTACT_CATEGORIES } from "./constants";
 import { VoiceField } from "./VoiceField";
 import { PainPointsSelect } from "./PainPointsSelect";
+import { MultiSelectFilter } from "./MultiSelectFilter";
 import { showToast } from "./Toast";
 import type { Contact, ContactNote, CallEntry } from "./types";
 
+// Multi-select filter shape (Tony's 2026-05-16 ask). Empty array = no filter.
 interface FilterState {
-  status: string;
-  stage: string;
-  type: string;
-  category: string;
+  status: string[];
+  stage: string[];
+  type: string[];
+  category: string[];
   search: string;
 }
 
@@ -76,9 +78,9 @@ export function ContactDrawer({ contactId, onClose, onUpdated, onDeleted, onAtte
   const prevId = currentIndex > 0 && contacts ? String(contacts[currentIndex - 1].id) : null;
   const nextId = currentIndex < total - 1 && contacts ? String(contacts[currentIndex + 1].id) : null;
 
-  const hasActiveFilters = filters && (
-    filters.status !== "All" || filters.stage !== "All" ||
-    filters.type !== "All" || filters.category !== "All" || filters.search.trim() !== ""
+  const hasActiveFilters = !!filters && (
+    filters.status.length > 0 || filters.stage.length > 0 ||
+    filters.type.length > 0 || filters.category.length > 0 || filters.search.trim() !== ""
   );
 
   const refreshContact = useCallback((cid: string, resetView = true) => {
@@ -240,7 +242,7 @@ export function ContactDrawer({ contactId, onClose, onUpdated, onDeleted, onAtte
               <button onClick={handleClose} style={{ background: "none", border: "none", cursor: "pointer", color: C.mut, fontSize: 18, padding: "0 2px", lineHeight: 1, marginLeft: 2 }}>✕</button>
             </div>
 
-            {/* Row 2: filter dropdowns (collapsible) */}
+            {/* Row 2: multi-select filters (Tony's 2026-05-16 ask). Empty array = no filter. */}
             {showFilters && onFiltersChange && filters && (
               <div style={{ padding: "8px 14px 10px", display: "flex", flexWrap: "wrap", gap: 6, borderTop: `1px solid ${C.brd}` }}>
                 <input
@@ -250,28 +252,28 @@ export function ContactDrawer({ contactId, onClose, onUpdated, onDeleted, onAtte
                   placeholder="Search…"
                   style={{ flex: "1 1 100%", padding: "5px 8px", borderRadius: 7, border: `1px solid ${filters.search ? C.blu : C.brd}`, fontSize: 12, fontFamily: F, outline: "none", background: "#FAFAF8" }}
                 />
-                <select value={filters.status} onChange={e => onFiltersChange({ status: e.target.value })}
-                  style={{ flex: 1, minWidth: 90, padding: "5px 6px", borderRadius: 7, border: `1px solid ${filters.status !== "All" ? C.red : C.brd}`, fontSize: 11, fontFamily: F, background: "#FAFAF8", color: filters.status !== "All" ? C.red : C.sub, fontWeight: filters.status !== "All" ? 700 : 400 }}>
-                  <option value="All">All Statuses</option>
-                  {STATUS_OPTIONS.map(s => <option key={s}>{s}</option>)}
-                </select>
-                <select value={filters.stage} onChange={e => onFiltersChange({ stage: e.target.value })}
-                  style={{ flex: 1, minWidth: 90, padding: "5px 6px", borderRadius: 7, border: `1px solid ${filters.stage !== "All" ? C.blu : C.brd}`, fontSize: 11, fontFamily: F, background: "#FAFAF8", color: filters.stage !== "All" ? C.blu : C.sub, fontWeight: filters.stage !== "All" ? 700 : 400 }}>
-                  <option value="All">All Stages</option>
-                  {PIPELINE_STAGES.map(s => <option key={s}>{s}</option>)}
-                </select>
-                <select value={filters.type} onChange={e => onFiltersChange({ type: e.target.value })}
-                  style={{ flex: 1, minWidth: 90, padding: "5px 6px", borderRadius: 7, border: `1px solid ${filters.type !== "All" ? C.amb : C.brd}`, fontSize: 11, fontFamily: F, background: "#FAFAF8", color: filters.type !== "All" ? C.amb : C.sub, fontWeight: filters.type !== "All" ? 700 : 400 }}>
-                  <option value="All">All Types</option>
-                  {CONTACT_TYPES.map(t => <option key={t}>{t}</option>)}
-                </select>
-                <select value={filters.category} onChange={e => onFiltersChange({ category: e.target.value })}
-                  style={{ flex: 1, minWidth: 90, padding: "5px 6px", borderRadius: 7, border: `1px solid ${filters.category !== "All" ? "#7B1FA2" : C.brd}`, fontSize: 11, fontFamily: F, background: "#FAFAF8", color: filters.category !== "All" ? "#7B1FA2" : C.sub, fontWeight: filters.category !== "All" ? 700 : 400 }}>
-                  <option value="All">All Categories</option>
-                  {CONTACT_CATEGORIES.map(c => <option key={c}>{c}</option>)}
-                </select>
+                <MultiSelectFilter
+                  label="Status" pluralLabel="Statuses" activeColor={C.red}
+                  values={filters.status} onChange={v => onFiltersChange({ status: v })}
+                  options={STATUS_OPTIONS}
+                />
+                <MultiSelectFilter
+                  label="Stage" pluralLabel="Stages" activeColor={C.blu}
+                  values={filters.stage} onChange={v => onFiltersChange({ stage: v })}
+                  options={PIPELINE_STAGES}
+                />
+                <MultiSelectFilter
+                  label="Type" pluralLabel="Types" activeColor={C.amb}
+                  values={filters.type} onChange={v => onFiltersChange({ type: v })}
+                  options={CONTACT_TYPES}
+                />
+                <MultiSelectFilter
+                  label="Category" pluralLabel="Categories" activeColor="#7B1FA2"
+                  values={filters.category} onChange={v => onFiltersChange({ category: v })}
+                  options={CONTACT_CATEGORIES}
+                />
                 {hasActiveFilters && (
-                  <button onClick={() => onFiltersChange({ status: "All", stage: "All", type: "All", category: "All", search: "" })}
+                  <button onClick={() => onFiltersChange({ status: [], stage: [], type: [], category: [], search: "" })}
                     style={{ padding: "5px 10px", borderRadius: 7, border: `1px solid ${C.brd}`, background: "#FAFAF8", color: C.mut, fontSize: 11, cursor: "pointer", fontFamily: F }}>
                     Clear
                   </button>

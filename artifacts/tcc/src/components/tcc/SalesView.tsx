@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { get, post } from "@/lib/api";
-import { C, F, FS, card, btn2, TIPS, SC, PIPELINE_STAGES, CONTACT_TYPES, CONTACT_CATEGORIES } from "./constants";
+import { C, F, FS, card, btn2, TIPS, SC, PIPELINE_STAGES, CONTACT_TYPES, CONTACT_CATEGORIES, STATUS_OPTIONS } from "./constants";
 import { SmsModal } from "./SmsModal";
 import { ContactDrawer } from "./ContactDrawer";
 import { AddContactModal } from "./AddContactModal";
 import { HoverCard } from "./HoverCard";
+import { MultiSelectFilter } from "./MultiSelectFilter";
 import type { Contact, CallEntry } from "./types";
 
 interface Props {
@@ -18,8 +19,6 @@ interface Props {
   onCompose?: (contact: Contact) => void;
   onConnectedCall?: (contact: { contactId: string; contactName: string; contactEmail?: string }) => void;
 }
-
-const STATUS_OPTIONS = ["All", "Hot", "Warm", "New", "Cold"] as const;
 
 function isOverdue(date?: string | null): boolean {
   if (!date) return false;
@@ -70,10 +69,13 @@ export function SalesView({ contacts: initialContacts, calls, calSide, onAttempt
   const [smsContact, setSmsContact] = useState<Contact | null>(null);
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
   const [showAddContact, setShowAddContact] = useState(false);
-  const [filterStatus, setFilterStatus] = useState<string>("All");
-  const [filterStage, setFilterStage] = useState<string>("All");
-  const [filterType, setFilterType] = useState<string>("All");
-  const [filterCategory, setFilterCategory] = useState<string>("All");
+  // Multi-select filter state — empty array means "no filter" (= "All").
+  // Tony's 2026-05-16 ask: allow Hot+Warm simultaneously, not single-select.
+  // Backend already supports comma-separated values per /contacts?status=Hot,Warm.
+  const [filterStatus, setFilterStatus] = useState<string[]>([]);
+  const [filterStage, setFilterStage] = useState<string[]>([]);
+  const [filterType, setFilterType] = useState<string[]>([]);
+  const [filterCategory, setFilterCategory] = useState<string[]>([]);
   const [search, setSearch] = useState("");
   const [results, setResults] = useState<Contact[]>(initialContacts);
   const [total, setTotal] = useState<number | null>(null);
@@ -89,7 +91,7 @@ export function SalesView({ contacts: initialContacts, calls, calSide, onAttempt
   const [chatInput, setChatInput] = useState("");
   const [chatSending, setChatSending] = useState(false);
 
-  const hasFilters = !!(search.trim() || filterStatus !== "All" || filterStage !== "All" || filterType !== "All" || filterCategory !== "All");
+  const hasFilters = !!(search.trim() || filterStatus.length || filterStage.length || filterType.length || filterCategory.length);
 
   useEffect(() => {
     if (!hasFilters) {
@@ -103,10 +105,11 @@ export function SalesView({ contacts: initialContacts, calls, calSide, onAttempt
     try {
       const params = new URLSearchParams({ limit: "50", offset: String(newOffset) });
       if (search.trim()) params.set("search", search.trim());
-      if (filterStatus !== "All") params.set("status", filterStatus);
-      if (filterStage !== "All") params.set("stage", filterStage);
-      if (filterType !== "All") params.set("type", filterType);
-      if (filterCategory !== "All") params.set("category", filterCategory);
+      // Multi-select filters: join with comma. BE accepts ?status=Hot,Warm.
+      if (filterStatus.length)   params.set("status",   filterStatus.join(","));
+      if (filterStage.length)    params.set("stage",    filterStage.join(","));
+      if (filterType.length)     params.set("type",     filterType.join(","));
+      if (filterCategory.length) params.set("category", filterCategory.join(","));
       const data = await get<{ contacts: Contact[]; total: number } | Contact[]>(`/contacts?${params}`);
       const list = Array.isArray(data) ? data : data.contacts;
       const tot = Array.isArray(data) ? list.length : data.total;
@@ -221,11 +224,11 @@ export function SalesView({ contacts: initialContacts, calls, calSide, onAttempt
         onNavigate={id => setSelectedContactId(id)}
         filters={{ status: filterStatus, stage: filterStage, type: filterType, category: filterCategory, search }}
         onFiltersChange={partial => {
-          if (partial.status !== undefined) setFilterStatus(partial.status);
-          if (partial.stage !== undefined) setFilterStage(partial.stage);
-          if (partial.type !== undefined) setFilterType(partial.type);
+          if (partial.status   !== undefined) setFilterStatus(partial.status);
+          if (partial.stage    !== undefined) setFilterStage(partial.stage);
+          if (partial.type     !== undefined) setFilterType(partial.type);
           if (partial.category !== undefined) setFilterCategory(partial.category);
-          if (partial.search !== undefined) setSearch(partial.search);
+          if (partial.search   !== undefined) setSearch(partial.search);
         }}
       />
       <AddContactModal open={showAddContact} onClose={() => setShowAddContact(false)} onCreated={handleContactCreated} />
@@ -375,33 +378,31 @@ export function SalesView({ contacts: initialContacts, calls, calSide, onAttempt
             </div>
           </div>
 
-          {/* ── Filters ── */}
+          {/* ── Filters (multi-select per Tony's 2026-05-16 feedback) ── */}
           <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
-            {[
-              { value: filterStatus, onChange: setFilterStatus, options: STATUS_OPTIONS.map(s => ({ value: s, label: s === "All" ? "All Statuses" : s })), activeColor: C.red },
-              { value: filterStage, onChange: setFilterStage, options: [{ value: "All", label: "All Stages" }, ...PIPELINE_STAGES.map(s => ({ value: s, label: s }))], activeColor: C.blu },
-              { value: filterType, onChange: setFilterType, options: [{ value: "All", label: "All Types" }, ...CONTACT_TYPES.map(t => ({ value: t, label: t }))], activeColor: C.amb },
-              { value: filterCategory, onChange: setFilterCategory, options: [{ value: "All", label: "All Categories" }, ...CONTACT_CATEGORIES.map(c => ({ value: c, label: c }))], activeColor: "#7B1FA2" },
-            ].map((f, i) => (
-              <select
-                key={i}
-                value={f.value}
-                onChange={e => f.onChange(e.target.value)}
-                style={{
-                  padding: "5px 8px", borderRadius: 7,
-                  border: `1px solid ${f.value !== "All" ? f.activeColor : C.brd}`,
-                  fontSize: 12, fontFamily: F, background: "#FAFAF8",
-                  color: f.value !== "All" ? f.activeColor : C.sub,
-                  cursor: "pointer", outline: "none",
-                  fontWeight: f.value !== "All" ? 700 : 400,
-                }}
-              >
-                {f.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
-            ))}
+            <MultiSelectFilter
+              label="Status" pluralLabel="Statuses" activeColor={C.red}
+              values={filterStatus} onChange={setFilterStatus}
+              options={STATUS_OPTIONS}
+            />
+            <MultiSelectFilter
+              label="Stage" pluralLabel="Stages" activeColor={C.blu}
+              values={filterStage} onChange={setFilterStage}
+              options={PIPELINE_STAGES}
+            />
+            <MultiSelectFilter
+              label="Type" pluralLabel="Types" activeColor={C.amb}
+              values={filterType} onChange={setFilterType}
+              options={CONTACT_TYPES}
+            />
+            <MultiSelectFilter
+              label="Category" pluralLabel="Categories" activeColor="#7B1FA2"
+              values={filterCategory} onChange={setFilterCategory}
+              options={CONTACT_CATEGORIES}
+            />
             {hasFilters && (
               <button
-                onClick={() => { setFilterStatus("All"); setFilterStage("All"); setFilterType("All"); setFilterCategory("All"); setSearch(""); }}
+                onClick={() => { setFilterStatus([]); setFilterStage([]); setFilterType([]); setFilterCategory([]); setSearch(""); }}
                 style={{ padding: "5px 10px", borderRadius: 7, border: `1px solid ${C.brd}`, background: "#FAFAF8", color: C.mut, fontSize: 12, cursor: "pointer", fontFamily: F }}
               >
                 Clear

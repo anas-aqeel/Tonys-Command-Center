@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db, contactsTable, contactNotesTable, callLogTable } from "@workspace/db";
 import { communicationLogTable } from "../../lib/schema-v2";
-import { eq, ilike, or, and, sql, desc } from "drizzle-orm";
+import { eq, ilike, or, and, sql, desc, inArray } from "drizzle-orm";
 import { anthropic, createTrackedMessage } from "@workspace/integrations-anthropic-ai";
 import { syncContactsTab } from "./sheets-sync";
 import { isAgentRuntimeEnabled } from "../../agents/flags.js";
@@ -20,10 +20,23 @@ router.get("/contacts", async (req, res): Promise<void> => {
 
   const conditions: import("drizzle-orm").SQL[] = [];
 
-  if (status && status !== "All") conditions.push(eq(contactsTable.status, status));
-  if (stage && stage !== "All") conditions.push(eq(contactsTable.pipelineStage, stage));
-  if (type && type !== "All") conditions.push(eq(contactsTable.type, type));
-  if (category && category !== "All") conditions.push(eq(contactsTable.category, category));
+  // Multi-select filter support (Tony's 2026-05-16 ask). Each filter accepts
+  // either a single value ("Hot") or a comma-separated list ("Hot,Warm"). Empty
+  // / "All" / missing → no filter on that field.
+  const splitCSV = (v: string | undefined): string[] => {
+    if (!v || v === "All") return [];
+    return v.split(",").map(s => s.trim()).filter(s => s && s !== "All");
+  };
+  const applyMulti = (col: import("drizzle-orm").AnyColumn, values: string[]) => {
+    if (values.length === 0) return;
+    if (values.length === 1) conditions.push(eq(col, values[0]));
+    else conditions.push(inArray(col, values));
+  };
+
+  applyMulti(contactsTable.status,        splitCSV(status));
+  applyMulti(contactsTable.pipelineStage, splitCSV(stage));
+  applyMulti(contactsTable.type,          splitCSV(type));
+  applyMulti(contactsTable.category,      splitCSV(category));
 
   if (search && search.trim()) {
     const q = `%${search.trim()}%`;
