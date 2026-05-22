@@ -310,7 +310,13 @@ function DayTimeline({ meetings, autoBlocks, onNavigate }: { meetings: CalItem[]
             );
           })}
 
-          {/* Auto-inserted work blocks (Sales Calls + Priority Emails) */}
+          {/* Auto-inserted SUGGESTED work blocks (Sales Calls + Priority Emails).
+              H2 (Tony's 2026-05-22 screenshot feedback): these are not real
+              calendar events — they're client-side suggestions for where his
+              10 calls + priority email block could fit. Visually distinguish
+              with a dashed border, reduced opacity, and an explicit
+              "suggested" badge so they no longer look like booked meetings.
+              Hover tooltip explains they're suggestions, not bookings. */}
           {autoBlocks.map((blk, i) => {
             const x = Math.max(0, (blk.start - TL_START) * PPM);
             const w = Math.max(6, (blk.end - blk.start) * PPM - 2);
@@ -319,20 +325,37 @@ function DayTimeline({ meetings, autoBlocks, onNavigate }: { meetings: CalItem[]
             const bgColor = isSales ? "#FFF0F0" : "#FFF5EC";
             const textColor = isSales ? "#C62828" : "#E65100";
             const wide = w > 80;
+            const tooltip = `Suggested time for your daily ${isSales ? "10 calls" : "priority email block"} — not on your calendar.`;
             return (
-              <div key={`auto-${i}`} style={{
-                position: "absolute", left: x, top: 6,
-                width: w, height: 58,
-                background: bgColor,
-                border: `1.5px solid ${borderColor}`,
-                borderRadius: 3, padding: "4px 5px",
-                overflow: "hidden", boxSizing: "border-box",
-                cursor: "default",
-              }}>
+              <div
+                key={`auto-${i}`}
+                title={tooltip}
+                style={{
+                  position: "absolute", left: x, top: 6,
+                  width: w, height: 58,
+                  background: bgColor,
+                  border: `1.5px dashed ${borderColor}`,
+                  borderRadius: 3, padding: "4px 5px",
+                  overflow: "hidden", boxSizing: "border-box",
+                  cursor: "help",
+                  opacity: 0.7,
+                }}
+              >
+                <div style={{
+                  position: "absolute", top: 2, right: 3,
+                  fontSize: 7, fontWeight: 700, color: textColor,
+                  background: "#fff", border: `1px solid ${borderColor}55`,
+                  padding: "0 3px", borderRadius: 2,
+                  textTransform: "uppercase", letterSpacing: 0.3,
+                  lineHeight: 1.3,
+                }}>
+                  suggested
+                </div>
                 <div style={{
                   fontSize: 9, fontWeight: 800, fontStyle: "italic", color: textColor,
                   lineHeight: 1.2, whiteSpace: "nowrap",
                   overflow: "hidden", textOverflow: "ellipsis",
+                  marginRight: wide ? 56 : 0, // leave room for the suggested badge
                 }}>
                   {blk.label}
                 </div>
