@@ -3362,6 +3362,15 @@ function BusinessPlanTab() {
 export function BusinessView({ onBack, defaultTab, onTabChange }: { onBack: () => void; defaultTab?: Tab; onTabChange?: (tab: Tab) => void }) {
   const [tab, setTabRaw] = useState<Tab>(defaultTab || "goals");
   const setTab = useCallback((t: Tab) => { setTabRaw(t); onTabChange?.(t); }, [onTabChange]);
+
+  // C4 (Tony's 2026-05-16): when the hamburger menu deep-links to a specific
+  // sub-tab while BusinessView is already mounted (e.g. user on the goals tab
+  // clicks "Master Task List"), useState's initial-value-only semantics mean
+  // tab stays stale. Sync the internal tab whenever defaultTab changes.
+  useEffect(() => {
+    if (defaultTab && defaultTab !== tab) setTabRaw(defaultTab);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [defaultTab]);
   const [masterSubTab, setMasterSubTab] = useState<"tasks" | "linear">("tasks");
   const [pendingParentFilter, setPendingParentFilter] = useState<string | null>(null);
   // Survives the Ideas → Tasks tab switch so MasterTaskTab opens the
