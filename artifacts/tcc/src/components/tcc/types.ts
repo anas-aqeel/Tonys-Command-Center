@@ -86,7 +86,12 @@ export interface SlackItem {
   message: string;
   level: "high" | "mid" | "low";
   channel: string;
+  /** Canonical Slack permalink resolved by BE via chat.getPermalink. */
   url?: string;
+  /** Slack message timestamp — primary key for ack/complete (see D2). */
+  ts?: string;
+  /** Channel ID where the message lives (kept for ack/complete). */
+  channelId?: string;
 }
 
 export interface LinearItem {

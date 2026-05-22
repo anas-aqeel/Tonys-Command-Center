@@ -97,7 +97,17 @@ type CalItem = {
 type EmailImportant = { id: number; from: string; subj: string; why: string; time: string; p: string; contactContext?: string; gmailMessageId?: string; };
 type EmailFyi = { id: number; from: string; subj: string; why: string };
 type EmailPromotion = { id: number; from: string; subj: string; why: string };
-type SlackItem = { from: string; message: string; level: string; channel: string };
+type SlackItem = {
+  from: string;
+  message: string;
+  level: string;
+  channel: string;
+  // D1 (Tony's 2026-05-16): permalink so the dropdown's "Open ↗" jumps
+  // straight to the actual message. ts + channelId kept for D2 (ack/complete).
+  url?: string;
+  ts?: string;
+  channelId?: string;
+};
 type LinearItem = {
   who: string; task: string; id: string; level: string;
   dueDate?: string | null; startDate?: string | null; size?: string | null;
@@ -412,6 +422,8 @@ async function fetchLiveSlack(): Promise<SlackItem[] | null> {
             message: (m.text || "").slice(0, 120),
             level: /urgent|asap|blocking/i.test(m.text || "") ? "high" : "mid",
             channel: `#${ch.name}`,
+            ts: m.ts,
+            channelId: ch.id,
           });
         }
       }
@@ -436,6 +448,8 @@ async function fetchLiveSlack(): Promise<SlackItem[] | null> {
             message: (m.text || "").slice(0, 120),
             level: /urgent|asap/i.test(m.text || "") ? "high" : "low",
             channel: "DM",
+            ts: m.ts,
+            channelId: dm.id,
           });
         }
       }
@@ -446,7 +460,25 @@ async function fetchLiveSlack(): Promise<SlackItem[] | null> {
     // If we got nothing from channels OR DMs, return null → seed fallback
     if (items.length === 0 && !chanRes.ok && !imRes.ok) return null;
 
-    return items.slice(0, 5);
+    const limited = items.slice(0, 5);
+
+    // D1 (Tony's 2026-05-16): resolve a real Slack permalink for each item so
+    // "Open ↗" jumps to the actual message instead of falling back to the
+    // workspace home. chat.getPermalink is the canonical source — handles the
+    // workspace subdomain correctly and works for both channels and DMs.
+    // Parallelize: ~50ms each × 5 messages = ~250ms upper bound.
+    await Promise.all(limited.map(async item => {
+      if (!item.ts || !item.channelId) return;
+      try {
+        const r = await fetch(
+          `https://slack.com/api/chat.getPermalink?channel=${encodeURIComponent(item.channelId)}&message_ts=${encodeURIComponent(item.ts)}`,
+          { headers }
+        ).then(x => x.json()) as { ok: boolean; permalink?: string };
+        if (r.ok && r.permalink) item.url = r.permalink;
+      } catch { /* ignore — fallback to deep-link on FE */ }
+    }));
+
+    return limited;
   } catch (err) {
     console.warn("[brief] Slack live fetch failed:", err instanceof Error ? err.message : err);
     return null;
