@@ -3524,7 +3524,12 @@ export function BusinessView({ onBack, defaultTab, onTabChange }: { onBack: () =
             <MasterSubTabBar value={masterSubTab} onChange={setMasterSubTab} />
             {masterSubTab === "tasks" && (
               <MasterTaskTab
-                onRefreshAll={() => { loadPlan(); loadWeekly(); }}
+                // C3 (Tony's 2026-05-16): task edits must propagate to ALL views
+                // that read the same data — 411 cascade (loadPlan), weekly
+                // (loadWeekly), and the Top 3 panel (loadTop3). Previously
+                // loadTop3 was only fetched on mount, so a renamed task kept
+                // its old title in the Top 3 card here until full reload.
+                onRefreshAll={() => { loadPlan(true); loadWeekly(); loadTop3(); }}
                 categories={categories}
                 initialParentFilter={pendingParentFilter}
                 onInitialParentFilterConsumed={() => setPendingParentFilter(null)}
