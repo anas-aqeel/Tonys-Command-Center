@@ -262,8 +262,9 @@ export function PrintView({
   const emails = emailsImportant.slice(0, 8);
   const linActive = linearItems.slice(0, 30);
   const slackActive = slackItems.slice(0, 8);
-  // F1: filter to ACTIVE local tasks not already done; cap to ~10 for the
-  // back-page section. Sort by due date ascending (no date = end).
+  // F1: filter to ACTIVE local tasks not already done; cap to 8 for the
+  // back-page section so F2's 2-page constraint holds even with full Linear
+  // + email + slack rows. Sort by due date ascending (no date = end).
   const todoList = localTasks
     .slice()
     .sort((a, b) => {
@@ -272,7 +273,7 @@ export function PrintView({
       if (b.dueDate) return 1;
       return 0;
     })
-    .slice(0, 10);
+    .slice(0, 8);
   const ramiItems = linActive.filter(l => (l.who || "").toLowerCase().includes("rami") || (l.who || "").toLowerCase().includes("ramy") || (l.who || "").toLowerCase().includes("remy"));
   const ethanItems = linActive.filter(l => (l.who || "").toLowerCase().includes("ethan"));
   const workBlocks = computeWorkBlocks(meetings);
@@ -357,11 +358,21 @@ export function PrintView({
             margin: 0;
             box-shadow: none !important;
             border-radius: 0 !important;
+            /* F2 (Tony's 2026-05-16): hard-cap each page to exactly one sheet.
+               Letter portrait minus 0.4in×2 margins = 10.2in usable; we clip
+               at 10.0in for a small safety buffer so overflow content never
+               spills onto a 3rd page. */
+            max-height: 10in;
+            overflow: hidden !important;
+            page-break-inside: avoid;
+            break-inside: avoid-page;
           }
           #print-wrapper .print-page + .print-page {
             page-break-before: always;
             break-before: page;
           }
+          /* F2: never break a table row or a section heading across pages. */
+          #print-wrapper table, #print-wrapper tr { page-break-inside: avoid; break-inside: avoid; }
         }
         @page { size: letter portrait; margin: 0.4in 0.45in; }
       `}</style>
