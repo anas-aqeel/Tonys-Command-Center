@@ -3,6 +3,7 @@ import { get, post, patch, put, del } from "@/lib/api";
 import { C, F } from "@/components/tcc/constants";
 import { IdeasView } from "@/components/tcc/IdeasView";
 import { showTrainNowToast } from "@/lib/trainNowToast";
+import { LinearAttachPicker } from "@/components/tcc/LinearAttachPicker";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1330,10 +1331,16 @@ function TaskDetailModal({ task, onClose, onSaved }: {
             <input type="date" value={form.dueDate} onChange={e => setForm(p => ({ ...p, dueDate: e.target.value }))} style={inp} />
           </div>
 
-          {form.source === "Linear" && (
-            <div>
-              <label style={lbl}>Linear ID <span style={{ fontWeight: 400, color: C.mut, fontSize: 10 }}>— multiple IDs? separate with commas (e.g. COM-341, COM-342)</span></label>
-              <input value={form.linearId} onChange={e => setForm(p => ({ ...p, linearId: e.target.value }))} style={inp} placeholder="e.g. COM-341 or COM-341, COM-342" />
+          {/* C7 (Tony's 2026-05-16): Linear tie-ins available on ANY task, not
+              just source=Linear. Typeahead picker replaces the manual comma list. */}
+          <LinearAttachPicker
+            value={form.linearId}
+            onChange={next => setForm(p => ({ ...p, linearId: next }))}
+            label="Linear issues (attach / remove)"
+          />
+          {form.source === "Linear" && form.linearId === "" && (
+            <div style={{ fontSize: 10, color: C.amb, marginTop: -4 }}>
+              Source is "Linear" but no issues attached yet.
             </div>
           )}
 
@@ -1353,26 +1360,9 @@ function TaskDetailModal({ task, onClose, onSaved }: {
             />
           </div>
 
-          {(() => {
-            const ids = splitLinearIds(form.linearId || task.linearId);
-            if (ids.length === 0) return null;
-            return (
-              <div>
-                <label style={lbl}>Linear {ids.length === 1 ? "Link" : "Links"}</label>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-                  {ids.map((id, i) => (
-                    <a
-                      key={id + i}
-                      href={`https://linear.app/issue/${id}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{ fontSize: 13, color: C.blu, textDecoration: "none", padding: "4px 8px", borderRadius: 6, background: C.bluBg, border: `1px solid ${C.blu}33` }}
-                    >{id} ↗</a>
-                  ))}
-                </div>
-              </div>
-            );
-          })()}
+          {/* C7: the LinearAttachPicker above already renders attached IDs as
+              chips with title + open-in-Linear link + remove button; the old
+              duplicate "Linear Links" badge row is removed. */}
         </div>
 
         {/* Footer */}
