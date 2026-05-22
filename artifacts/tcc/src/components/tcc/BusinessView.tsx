@@ -398,9 +398,12 @@ function GPSCards() {
 
 function CategoryGrid({
   categories,
+  onCategoryClick,
 }: {
   categories: CategoryWithSubs[];
   onToggleTask: (id: string, complete: boolean) => void;
+  /** E1 (Tony's 2026-05-16): jump to master task list filtered to this category. */
+  onCategoryClick?: (categoryKey: string) => void;
 }) {
   if (categories.length === 0) {
     return <div style={{ textAlign: "center", padding: "48px", color: C.mut, fontFamily: F }}>Loading…</div>;
@@ -414,13 +417,26 @@ function CategoryGrid({
         const colors = CAT_COLORS[colorKey] || { accent: "#00007A" };
         const accent = colors.accent;
         const catPct = cat.totalTasks > 0 ? Math.round((cat.completedTasks / cat.totalTasks) * 100) : 0;
+        const clickable = !!onCategoryClick;
+        const handleJump = () => { if (cat.category && onCategoryClick) onCategoryClick(cat.category); };
 
         return (
           <div key={cat.id} style={{ marginBottom: 32 }}>
-            {/* Category title + stats */}
-            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 4 }}>
-              <div style={{ fontSize: 22, fontWeight: 800, color: accent, fontFamily: F }}>
+            {/* Category title + stats — click anywhere on title row to drill in (E1) */}
+            <div
+              style={{
+                display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 4,
+                cursor: clickable ? "pointer" : "default",
+              }}
+              onClick={clickable ? handleJump : undefined}
+              title={clickable ? "Open Master Task List filtered to this category" : undefined}
+            >
+              <div style={{
+                fontSize: 22, fontWeight: 800, color: accent, fontFamily: F,
+                display: "inline-flex", alignItems: "baseline", gap: 6,
+              }}>
                 {cat.title}
+                {clickable && <span style={{ fontSize: 10, opacity: 0.6, fontWeight: 600 }}>↗</span>}
               </div>
               <span style={{ fontSize: 11, fontWeight: 600, color: accent, fontFamily: F, opacity: 0.85, whiteSpace: "nowrap", marginLeft: 8 }}>
                 {cat.completedTasks}/{cat.totalTasks} · {catPct}% done
@@ -1476,17 +1492,20 @@ type OrganizePreview = {
   currentOrder: (PlanItem & { sprintId?: string })[];
 };
 
-function MasterTaskTab({ onRefreshAll, categories, initialParentFilter, onInitialParentFilterConsumed, initialPrefill, onInitialPrefillConsumed }: {
+function MasterTaskTab({ onRefreshAll, categories, initialParentFilter, onInitialParentFilterConsumed, initialPrefill, onInitialPrefillConsumed, initialCategoryFilter, onInitialCategoryFilterConsumed }: {
   onRefreshAll: () => void;
   categories: CategoryWithSubs[];
   initialParentFilter?: string | null;
   onInitialParentFilterConsumed?: () => void;
   initialPrefill?: Record<string, string> | null;
   onInitialPrefillConsumed?: () => void;
+  /** E1: filter master task list by this category on mount (jump-to from 411 cascade). */
+  initialCategoryFilter?: string | null;
+  onInitialCategoryFilterConsumed?: () => void;
 }) {
   const [tasks, setTasks] = useState<(PlanItem & { sprintId?: string })[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filterCat, setFilterCat] = useState("");
+  const [filterCat, setFilterCat] = useState(initialCategoryFilter || "");
   const [filterOwner, setFilterOwner] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
   const [filterPriority, setFilterPriority] = useState("");
@@ -1494,6 +1513,16 @@ function MasterTaskTab({ onRefreshAll, categories, initialParentFilter, onInitia
   const [filterParent, setFilterParent] = useState(initialParentFilter || "");
   const [filterLinearOnly, setFilterLinearOnly] = useState(false);
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
+
+  // E1: apply incoming category filter when prop changes (e.g. user clicked
+  // another category in the 411 cascade while master tab already mounted).
+  useEffect(() => {
+    if (initialCategoryFilter) {
+      setFilterCat(initialCategoryFilter);
+      onInitialCategoryFilterConsumed?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialCategoryFilter]);
   const [searchQ, setSearchQ] = useState("");
 
   // When parent filter comes from outside (weekly grid click), adopt it and notify caller
@@ -3363,6 +3392,9 @@ export function BusinessView({ onBack, defaultTab, onTabChange }: { onBack: () =
   }, [defaultTab]);
   const [masterSubTab, setMasterSubTab] = useState<"tasks" | "linear">("tasks");
   const [pendingParentFilter, setPendingParentFilter] = useState<string | null>(null);
+  // E1 (Tony's 2026-05-16): clicking a category in the 411 Goal Cascade
+  // hands off to the master task list, pre-filtered to that category.
+  const [pendingCategoryFilter, setPendingCategoryFilter] = useState<string | null>(null);
   // Survives the Ideas → Tasks tab switch so MasterTaskTab opens the
   // AddTaskModal with the right prefill on mount, no event-listener race.
   const [pendingTaskPrefill, setPendingTaskPrefill] = useState<Record<string, string> | null>(null);
@@ -3510,6 +3542,12 @@ export function BusinessView({ onBack, defaultTab, onTabChange }: { onBack: () =
                 <CategoryGrid
                   categories={categories}
                   onToggleTask={handleToggleTask}
+                  onCategoryClick={(catKey) => {
+                    // E1: jump to master task list filtered to this category.
+                    setPendingCategoryFilter(catKey);
+                    setMasterSubTab("tasks");
+                    setTab("tasks");
+                  }}
                 />
                 <WeeklyGrid byOwner={byOwner} childStats={childStats} onToggleTask={handleToggleTask} onTaskClick={handleWeeklyTaskClick} />
               </>
@@ -3534,6 +3572,8 @@ export function BusinessView({ onBack, defaultTab, onTabChange }: { onBack: () =
                 onInitialParentFilterConsumed={() => setPendingParentFilter(null)}
                 initialPrefill={pendingTaskPrefill}
                 onInitialPrefillConsumed={() => setPendingTaskPrefill(null)}
+                initialCategoryFilter={pendingCategoryFilter}
+                onInitialCategoryFilterConsumed={() => setPendingCategoryFilter(null)}
               />
             )}
             {masterSubTab === "linear" && <LinearPrioritiesTable />}
