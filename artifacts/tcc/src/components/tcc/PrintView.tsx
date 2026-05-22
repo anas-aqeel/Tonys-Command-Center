@@ -247,7 +247,26 @@ export function PrintView({
   const handleRefresh = async () => {
     if (refreshing) return;
     setRefreshing(true);
-    try { if (onRefresh) await onRefresh(); } catch { /* ok */ } finally { setRefreshing(false); }
+    setProcessResult(null);
+    // F3 (Tony's 2026-05-16): surface clear feedback. Previously this silently
+    // swallowed errors which is why Tony saw stale data + a confusing "Error
+    // contacting server" message bleeding over from the Process Scanned Sheet
+    // attempt that sits next to it (F4 hides that button so it can't confuse).
+    // Reload local tasks too so the new To-Do section (F1) reflects edits.
+    try {
+      const tasksPromise = get<LocalTask[]>("/tasks/local")
+        .then(d => { if (Array.isArray(d)) setLocalTasks(d); })
+        .catch(() => {});
+      const refreshPromise = onRefresh ? onRefresh() : Promise.resolve();
+      await Promise.all([tasksPromise, refreshPromise]);
+      setProcessResult("✅ Refreshed — calendar, emails, and to-dos updated");
+      setTimeout(() => setProcessResult(null), 3000);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setProcessResult(`⚠ Refresh failed — ${msg.slice(0, 120) || "check your connection"}`);
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   const ck = (id: string) => done.has(id);
