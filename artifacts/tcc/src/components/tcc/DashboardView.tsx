@@ -3,11 +3,13 @@ import { C, F, FS } from "./constants";
 import { get, patch, post } from "@/lib/api";
 import { ContactDrawer } from "./ContactDrawer";
 import { SmsModal } from "./SmsModal";
-import type { TaskItem, CalItem, EmailItem, LinearItem, SlackItem, CallEntry } from "./types";
+import type { TaskItem, CalItem, EmailItem, LinearItem, SlackItem, CallEntry, Contact } from "./types";
 
 // ── Types ──────────────────────────────────────────────────────────
 interface LocalTask { id: string; text: string; dueDate?: string | null; taskType?: string | null; size?: string | null; }
-interface Contact { id?: string; name: string; phone?: string; company?: string; status?: string; nextStep?: string; lastContactDate?: string; email?: string; }
+// Contact type imported from ./types — kept canonical so the parent's Contact
+// state (with required id + extra fields like followUpDate) plumbs through
+// without TS structural-type-mismatch on the onContactUpdated callback.
 type NavView = "emails" | "schedule" | "sales" | "tasks";
 
 interface Props {
@@ -27,6 +29,10 @@ interface Props {
   onOpenEmail?: (em: EmailItem) => void;
   onAttempt?: (contact: { id: string | number; name: string; email?: string }) => void;
   onCompose?: (contact: Contact) => void;
+  // Propagate contact edits from the ContactDrawer up to the parent so the
+  // Sales Calls table re-renders immediately after a status / follow-up change
+  // (Tony's 2026-05-16 "Andy Polock" feedback).
+  onContactUpdated?: (contact: Contact) => void;
 }
 
 
@@ -771,7 +777,7 @@ function formatRelativeTime(d: Date | null | undefined): string {
   return `~${day}d ago`;
 }
 
-export function DashboardView({ tasks, tDone, calendarData, emailsImportant, linearItems, slackItems = [], contacts, calls = [], emailsLoaded = true, briefLoaded = true, lastEmailAiAt, onComplete, onNavigate, onOpenEmail, onAttempt, onCompose }: Props) {
+export function DashboardView({ tasks, tDone, calendarData, emailsImportant, linearItems, slackItems = [], contacts, calls = [], emailsLoaded = true, briefLoaded = true, lastEmailAiAt, onComplete, onNavigate, onOpenEmail, onAttempt, onCompose, onContactUpdated }: Props) {
   const [localTasks, setLocalTasks] = useState<LocalTask[]>([]);
   const [checked, setChecked] = useState<Set<string>>(new Set());
 
@@ -864,7 +870,23 @@ export function DashboardView({ tasks, tDone, calendarData, emailsImportant, lin
   // Data — real sources only
   // Build set of contact names that have been called today (from actual call_log)
   const calledNames = new Set(calls.map(c => c.contactName.toLowerCase()));
-  const callList = contacts.slice(0, 10);
+
+  // Sales Calls list priority (Tony's 2026-05-16 feedback):
+  //   1) Hide contacts whose follow-up date is in the FUTURE — they reappear
+  //      automatically once that date is today/past, so today's list stays focused.
+  //   2) Sort by status (Hot > Warm > Cold > New) AND boost contacts whose
+  //      follow-up is due today/overdue to the top.
+  const todayStrPT = new Date().toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
+  const statusWeight: Record<string, number> = { Hot: 30, Warm: 20, Cold: 10, New: 5 };
+  const callList = contacts
+    .filter(c => !(c.followUpDate && c.followUpDate > todayStrPT))
+    .slice()
+    .sort((a, b) => {
+      const sa = (statusWeight[a.status ?? ""] ?? 0) + (a.followUpDate && a.followUpDate <= todayStrPT ? 15 : 0);
+      const sb = (statusWeight[b.status ?? ""] ?? 0) + (b.followUpDate && b.followUpDate <= todayStrPT ? 15 : 0);
+      return sb - sa;
+    })
+    .slice(0, 10);
   const meetings = calendarData;
   const emails   = emailsImportant.slice(0, 3);
   const todayStr    = new Date().toISOString().slice(0, 10);
@@ -1611,7 +1633,7 @@ export function DashboardView({ tasks, tDone, calendarData, emailsImportant, lin
       <ContactDrawer
         contactId={selectedContactId}
         onClose={() => setSelectedContactId(null)}
-        onUpdated={() => {}}
+        onUpdated={c => { if (onContactUpdated) onContactUpdated(c); }}
         onDeleted={() => setSelectedContactId(null)}
         onAttempt={c => { if (onAttempt) onAttempt(c); setSelectedContactId(null); }}
         onConnected={() => setSelectedContactId(null)}

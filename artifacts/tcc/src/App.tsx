@@ -165,13 +165,31 @@ export default function App() {
     setRefreshing(true);
     try {
       const which = sources?.length ? sources : ["calendar", "emails", "slack", "linear"];
-      await Promise.all(which.map(s => {
-        if (s === "calendar") return loadCalendar(true);
-        if (s === "emails")   return loadEmails(true);
-        if (s === "slack")    return loadSlack(true);
-        if (s === "linear")   return loadLinear(true);
-        return Promise.resolve();
-      }));
+      // Hamburger / global refresh: also re-pull contacts + calls so the
+      // Sales Calls list reflects any status / follow-up changes made elsewhere
+      // (Tony's 2026-05-16 feedback: "Refreshing in the hamburger menu did not
+      // remove it from the list"). Per-section refresh paths (sources passed
+      // explicitly) keep their narrower scope. Inlined here (vs reusing
+      // loadContacts/loadCalls) to avoid TS hoisting issues since those are
+      // declared later in the component.
+      const isFullRefresh = !sources?.length;
+      await Promise.all([
+        ...which.map(s => {
+          if (s === "calendar") return loadCalendar(true);
+          if (s === "emails")   return loadEmails(true);
+          if (s === "slack")    return loadSlack(true);
+          if (s === "linear")   return loadLinear(true);
+          return Promise.resolve();
+        }),
+        ...(isFullRefresh ? [
+          get<{ contacts: Contact[]; total: number } | Contact[]>("/contacts?limit=50")
+            .then(r => setContacts(Array.isArray(r) ? r : r.contacts))
+            .catch(() => {}),
+          get<CallEntry[]>("/calls")
+            .then(d => setCalls(d ?? []))
+            .catch(() => {}),
+        ] : []),
+      ]);
       setLastRefresh(new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/Los_Angeles" }));
     } finally {
       setRefreshing(false);
@@ -469,9 +487,9 @@ export default function App() {
   const [snoozedLoaded, setSnoozedLoaded] = useState(false);
   const [tasksCompletedLoaded, setTasksCompletedLoaded] = useState(false);
 
-  const loadCalls = useCallback(() => {
-    if (callsLoaded) return;
-    get<CallEntry[]>("/calls").then(d => { if (d?.length) setCalls(d); }).catch(() => {});
+  const loadCalls = useCallback((force = false) => {
+    if (callsLoaded && !force) return;
+    get<CallEntry[]>("/calls").then(d => { setCalls(d ?? []); }).catch(() => {});
     setCallsLoaded(true);
   }, [callsLoaded]);
 
@@ -499,8 +517,8 @@ export default function App() {
     setTasksCompletedLoaded(true);
   }, [tasksCompletedLoaded]);
 
-  const loadContacts = useCallback(() => {
-    if (contactsLoaded) return;
+  const loadContacts = useCallback((force = false) => {
+    if (contactsLoaded && !force) return;
     get<{ contacts: Contact[]; total: number } | Contact[]>("/contacts?limit=50").then(r => {
       const list = Array.isArray(r) ? r : r.contacts;
       setContacts(list);
@@ -512,21 +530,33 @@ export default function App() {
 
   // Per-view section requirements. Only fires loaders for sections this view
   // displays. Already-loaded sections short-circuit (no-op).
+  //
+  // Calendar gets a one-time forced refresh per session on the first dashboard
+  // open (Tony's 2026-05-16 feedback: "At entry I needed it to refresh it in
+  // order for it to match"). The sessionStorage flag persists across re-mounts
+  // within the same tab but resets when the tab is closed, so the next session
+  // re-fetches live GCal once.
   useEffect(() => {
     if (loading) return;
+    const calendarFirstRefreshDone = sessionStorage.getItem("tcc.calendar.firstRefreshDone") === "1";
+    const forceCalendarOnce = !calendarFirstRefreshDone;
+    const markCalendarRefreshed = () => sessionStorage.setItem("tcc.calendar.firstRefreshDone", "1");
+
     switch (view) {
       case "dashboard":
-        loadCalendar(); loadEmails(); loadLinear();
+        loadCalendar(forceCalendarOnce).then(() => { if (forceCalendarOnce) markCalendarRefreshed(); });
+        loadEmails(); loadLinear();
         loadCalls(); loadContacts(); loadSnoozed(); loadTasksCompleted();
         break;
       case "emails":
         loadEmails(); loadSnoozed();
         break;
       case "schedule":
-        loadCalendar();
+        loadCalendar(forceCalendarOnce).then(() => { if (forceCalendarOnce) markCalendarRefreshed(); });
         break;
       case "sales":
-        loadContacts(); loadCalls(); loadCalendar(); // calendar for sidebar
+        loadContacts(); loadCalls();
+        loadCalendar(forceCalendarOnce).then(() => { if (forceCalendarOnce) markCalendarRefreshed(); });
         break;
       case "business":
         loadLinear(); loadIdeas();
@@ -893,6 +923,7 @@ export default function App() {
         onOpenEmail={em => setEmailCompose({ threadId: em.gmailMessageId, subject: `Re: ${em.subj}` })}
         onAttempt={c => setAttempt(c)}
         onCompose={c => setEmailCompose({ to: c.email || "", contactId: String(c.id), contactName: c.name })}
+        onContactUpdated={c => setContacts(prev => prev.map(x => String(x.id) === String(c.id) ? c : x))}
       />
     </div>
   );
