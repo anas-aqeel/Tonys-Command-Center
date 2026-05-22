@@ -8,6 +8,7 @@ import { updateContactComms } from "../../lib/contact-comms";
 import { anthropic, createTrackedMessage } from "@workspace/integrations-anthropic-ai";
 import { isAgentRuntimeEnabled } from "../../agents/flags.js";
 import { runAgent } from "../../agents/runtime.js";
+import { substituteContactTokens } from "../../lib/contact-tokens.js";
 
 const router: IRouter = Router();
 
@@ -133,22 +134,25 @@ router.post("/email/suggest-draft", async (req, res): Promise<void> => {
 
   try {
     const recipient = contactName || to;
+    // First name for greetings — derive from contactName, fallback to to-address local part.
+    const firstName = (contactName || to.split("@")[0] || recipient).split(/\s+/)[0];
 
     const systemPrompt = `You are drafting emails on behalf of Tony Diaz, CEO of FlipIQ — a real estate wholesaling and investment platform.
 Tony's writing style: direct, warm, professional, action-oriented. He gets to the point fast and keeps emails short.
+Always greet the recipient with their actual first name; NEVER write placeholder tokens like {firstName}, {name}, or {fullName}.
 You must respond with ONLY a JSON object in this exact format (no markdown, no code fences):
 {"subject":"<subject line>","body":"<email body — use \\n for line breaks, do NOT include a signature>"}`;
 
     const userPrompt = replyToSnippet
-      ? `Draft a reply from Tony to ${recipient}.
+      ? `Draft a reply from Tony to ${recipient} (first name: ${firstName}).
 Original subject: "${subject || "No subject"}"
 Original message snippet: "${replyToSnippet}"
 ${context ? `Additional context: ${context}` : ""}
-Keep it 2-4 sentences. Be warm and direct.`
-      : `Draft an email from Tony to ${recipient}.
+Keep it 2-4 sentences. Be warm and direct. Address them as ${firstName} — no placeholder tokens.`
+      : `Draft an email from Tony to ${recipient} (first name: ${firstName}).
 ${subject ? `Subject hint: "${subject}"` : "Create a clear, compelling subject line."}
 ${context ? `Context/purpose: ${context}` : "Write a general outreach or follow-up email."}
-Keep the body to 3-5 sentences max.`;
+Keep the body to 3-5 sentences max. Address them as ${firstName} — no placeholder tokens.`;
 
     let raw = "";
 
@@ -202,6 +206,10 @@ Keep the body to 3-5 sentences max.`;
         draftBody = raw;
       }
     }
+
+    // B6 safety net: strip {firstName} / {name} placeholders that slipped through.
+    draftSubject = substituteContactTokens(draftSubject, { name: recipient, firstName });
+    draftBody = substituteContactTokens(draftBody, { name: recipient, firstName });
 
     res.json({ ok: true, subject: draftSubject, body: draftBody });
   } catch (err) {

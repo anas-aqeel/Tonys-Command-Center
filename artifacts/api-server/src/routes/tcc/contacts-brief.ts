@@ -3,6 +3,7 @@ import { z } from "zod";
 import { anthropic, createTrackedMessage } from "@workspace/integrations-anthropic-ai";
 import { isAgentRuntimeEnabled } from "../../agents/flags.js";
 import { runAgent } from "../../agents/runtime.js";
+import { substituteContactTokens } from "../../lib/contact-tokens.js";
 import { db, contactsTable, meetingHistoryTable } from "@workspace/db";
 import { contactIntelligenceTable, communicationLogTable, contactBriefsTable } from "../../lib/schema-v2";
 import { eq, desc, ilike } from "drizzle-orm";
@@ -143,6 +144,11 @@ ${context}`;
       const textBlock = response.content.find(b => b.type === "text");
       briefText = textBlock?.type === "text" ? textBlock.text : briefText;
     }
+
+    // B6 safety net: replace any {firstName}/{name} placeholders the model
+    // may have leaked into the brief (less likely than for emails, but the
+    // brief mentions the contact by name throughout).
+    briefText = substituteContactTokens(briefText, { name: contact.name });
 
     await db.insert(contactBriefsTable).values({
       contactId,

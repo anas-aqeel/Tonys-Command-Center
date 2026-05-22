@@ -9,6 +9,7 @@ import { createReminder } from "../../lib/gcal";
 import { updateContactComms } from "../../lib/contact-comms";
 import { isAgentRuntimeEnabled } from "../../agents/flags.js";
 import { runAgent } from "../../agents/runtime.js";
+import { substituteContactTokens } from "../../lib/contact-tokens.js";
 
 const router: IRouter = Router();
 
@@ -61,12 +62,19 @@ router.post("/calls", async (req, res): Promise<void> => {
   if (type === "attempt" && instructions) {
     try {
       let draftText: string | undefined;
+      // Tony's 2026-05-16 ask: use the contact's actual first name; no
+      // placeholder tokens. Inject the firstName into the prompt + sanitize
+      // any leaks via substituteContactTokens at the bottom.
+      const firstName = contactName.split(/\s+/)[0];
 
       // Flag-gated: AGENT_RUNTIME_CALLS=true routes through the new agent
       // runtime; default false keeps the legacy inline prompt intact.
       // Runtime path sends only dynamic data; voice/format rules in skill body.
       if (isAgentRuntimeEnabled("calls")) {
-        const runtimeMessage = `Call attempt — ${contactName} (no answer).\nTony's instructions: "${instructions}"`;
+        const runtimeMessage = `Call attempt — ${contactName} (first name: ${firstName}, no answer).
+Tony's instructions: "${instructions}"
+
+Use the contact's actual first name (${firstName}) in the greeting. Do NOT use placeholder tokens like {firstName}, {name}, or {fullName} — write the real name directly.`;
 
         const result = await runAgent("calls", "follow-up-draft", {
           userMessage: runtimeMessage,
@@ -83,12 +91,15 @@ router.post("/calls", async (req, res): Promise<void> => {
               role: "user",
               content: `Tony Diaz (FlipIQ CEO) tried to call ${contactName} but got no answer.
 Tony's instructions: "${instructions}"
-Draft a brief, professional follow-up email (3-4 sentences max). Plain text only, no subject line.`,
+Draft a brief, professional follow-up email (3-4 sentences max). Plain text only, no subject line. Use the contact's actual first name (${firstName}) in the greeting — never write placeholder tokens like {firstName} or {name}.`,
             },
           ],
         });
         draftText = msg.content.find(b => b.type === "text")?.text?.trim();
       }
+
+      // Safety net: strip any placeholder tokens that slipped through (B6).
+      draftText = draftText ? substituteContactTokens(draftText, { name: contactName }) : undefined;
 
       if (draftText) {
         const [updated] = await db.update(callLogTable)
@@ -185,13 +196,8 @@ Draft a short follow-up email recapping the call and confirming the next step. U
         followUpText = (block?.type === "text" ? block.text.trim() : null) || null;
       }
 
-      // Defense in depth: strip any placeholder tokens that slipped through.
-      if (followUpText) {
-        followUpText = followUpText
-          .replace(/\{first[_]?name\}/gi, firstName)
-          .replace(/\{name\}/gi, contactName)
-          .replace(/\{fullName\}/gi, contactName);
-      }
+      // Defense in depth: strip any placeholder tokens that slipped through (B6).
+      followUpText = followUpText ? substituteContactTokens(followUpText, { name: contactName, firstName }) : null;
     } catch (err) {
       req.log.warn({ err }, "Connected-call follow-up draft generation failed");
     }

@@ -9,6 +9,7 @@ import { todayPacific } from "../../lib/dates.js";
 import { recordFeedback } from "../../agents/feedback.js";
 import { isAgentRuntimeEnabled } from "../../agents/flags.js";
 import { runAgent } from "../../agents/runtime.js";
+import { substituteContactTokens } from "../../lib/contact-tokens.js";
 
 const router: IRouter = Router();
 
@@ -257,6 +258,9 @@ router.post("/emails/action", async (req, res): Promise<void> => {
     }
 
     let draft = "";
+    // First-name extraction for B6 token sanitation. `sender` typically looks
+    // like a display name ("Drew Wolfe") — split on whitespace.
+    const senderFirstName = (sender || "").split(/\s+/)[0] || sender || "there";
     try {
       let rawText = "";
 
@@ -266,13 +270,15 @@ router.post("/emails/action", async (req, res): Promise<void> => {
         // Runtime path: send only dynamic data — voice/format instructions live
         // in the skill body. Brain content stays in the user message because
         // email-brain → memory-section migration lands in a later phase.
-        const runtimeMessage = `From: ${sender}
+        const runtimeMessage = `From: ${sender} (first name: ${senderFirstName})
 Subject: ${subject}
 ${emailBody ? `\nORIGINAL EMAIL:\n${emailBody}` : "\n(No email body available — draft a generic professional reply based on the subject line.)"}
 ${reason ? `\nWhy this is important: ${reason}` : ""}
 ${notes ? `\nTony's notes: ${notes}` : ""}${brainContext
   ? `\n\nTONY'S EMAIL BRAIN (learned from training):\n${brainRow?.content || ""}`
-  : ""}`;
+  : ""}
+
+Address the sender as ${senderFirstName} — never use placeholder tokens like {firstName} or {name}.`;
 
         const result = await runAgent("email", "reply-draft", {
           userMessage: runtimeMessage,
@@ -282,13 +288,13 @@ ${notes ? `\nTony's notes: ${notes}` : ""}${brainContext
         rawText = result.text;
       } else {
         const userMessage = `Draft a reply to this email:
-From: ${sender}
+From: ${sender} (first name: ${senderFirstName})
 Subject: ${subject}
 ${emailBody ? `\nORIGINAL EMAIL:\n${emailBody}` : "\n(No email body available — draft a generic professional reply based on the subject line.)"}
 ${reason ? `\nContext: ${reason}` : ""}
 ${notes ? `\nAdditional notes from Tony: ${notes}` : ""}
 
-Write a professional reply from Tony Diaz. Keep it brief and action-oriented. Plain text only. Output ONLY the reply text — no preamble, no "here's a draft", no explanation. Start directly with the salutation.`;
+Write a professional reply from Tony Diaz. Keep it brief and action-oriented. Plain text only. Output ONLY the reply text — no preamble, no "here's a draft", no explanation. Start directly with the salutation. Address the sender as ${senderFirstName} — never use placeholder tokens like {firstName} or {name}.`;
         const message = await createTrackedMessage("email_action", {
           model: "claude-sonnet-4-6",
           max_tokens: 8192,
@@ -313,9 +319,11 @@ CRITICAL: Output ONLY the email reply text. Never preface with "Here is your rep
       draft = draft.replace(/^(sure[,!]?\s+)?(here(?:'s| is)[^\n]*\n+)/i, "");
       draft = draft.replace(/^(i'?d be happy to help[^\n]*\n+)/i, "");
       draft = draft.trim();
+      // B6 safety net: replace any placeholder tokens that slipped through.
+      draft = substituteContactTokens(draft, { name: sender || senderFirstName, firstName: senderFirstName });
     } catch (err) {
       req.log.warn({ err }, "Claude API failed for email reply");
-      draft = `Hi ${sender?.split(" ")[0] || "there"},\n\nThanks for reaching out. Let's connect to discuss this further.\n\nBest,\nTony`;
+      draft = `Hi ${senderFirstName},\n\nThanks for reaching out. Let's connect to discuss this further.\n\nBest,\nTony`;
     }
     res.json({ ok: true, draft });
     return;
@@ -394,15 +402,20 @@ router.post("/emails/rewrite", async (req, res): Promise<void> => {
     return;
   }
 
+  // B6: derive a first name for token-sanitation. Prefer recipientName; fall
+  // back to the local-part of the email address.
+  const recipientFirstName = (recipientName || recipientEmail?.split("@")[0] || "").split(/\s+/)[0] || recipientName || "there";
+
   // Build the context block. Each field is optional — the skill handles
   // missing context by writing a generic-but-on-topic email (per its rules).
   const ctxLines: string[] = [];
-  if (recipientName) ctxLines.push(`Recipient name: ${recipientName}`);
+  if (recipientName) ctxLines.push(`Recipient name: ${recipientName} (first name: ${recipientFirstName})`);
   if (recipientEmail) ctxLines.push(`Recipient email: ${recipientEmail}`);
   if (threadSnippet) {
     const trimmed = threadSnippet.length > 1500 ? threadSnippet.slice(0, 1500) + "..." : threadSnippet;
     ctxLines.push(`\nThread snippet (last message in conversation):\n${trimmed}`);
   }
+  ctxLines.push(`\nAddress the recipient as ${recipientFirstName} — never use placeholder tokens like {firstName} or {name}.`);
 
   const userMessage = ctxLines.length
     ? `${ctxLines.join("\n")}\n\n---\n\nUSER INPUT TO REWRITE OR USE AS PROMPT:\n${text.trim()}`
@@ -415,16 +428,17 @@ router.post("/emails/rewrite", async (req, res): Promise<void> => {
         caller: "direct",
         meta: { hasRecipient: !!recipientEmail, hasThread: !!threadSnippet },
       });
-      const cleaned = (result.text || "").trim()
+      let cleaned = (result.text || "").trim()
         .replace(/^```(?:text|markdown)?\s*\n?/i, "")
         .replace(/\n?```\s*$/, "")
         .trim();
+      cleaned = substituteContactTokens(cleaned, { name: recipientName || recipientFirstName, firstName: recipientFirstName });
       res.json({ ok: true, text: cleaned });
       return;
     }
 
     // Legacy path — single inline call when runtime flag is off.
-    const legacySystem = `You are Tony Diaz's AI email assistant. Tony runs FlipIQ (real estate wholesaling). Output ONLY the email body. No preamble. No "Here's the rewritten version". No markdown. Start with the salutation. Auto-detect: input may be a draft to clean up OR an instruction like "write to X about Y" — both produce a clean paste-ready email body in Tony's voice. End with "Tony" as the sign-off.`;
+    const legacySystem = `You are Tony Diaz's AI email assistant. Tony runs FlipIQ (real estate wholesaling). Output ONLY the email body. No preamble. No "Here's the rewritten version". No markdown. Start with the salutation. Auto-detect: input may be a draft to clean up OR an instruction like "write to X about Y" — both produce a clean paste-ready email body in Tony's voice. End with "Tony" as the sign-off. NEVER write placeholder tokens like {firstName} or {name} — always use the recipient's real name.`;
     const msg = await createTrackedMessage("agent_email_rewrite", {
       model: "claude-haiku-4-5",
       max_tokens: 1024,
@@ -432,10 +446,11 @@ router.post("/emails/rewrite", async (req, res): Promise<void> => {
       messages: [{ role: "user", content: userMessage }],
     });
     const block = msg.content.find(b => b.type === "text");
-    const out = (block?.type === "text" ? block.text : "").trim()
+    let out = (block?.type === "text" ? block.text : "").trim()
       .replace(/^```(?:text|markdown)?\s*\n?/i, "")
       .replace(/\n?```\s*$/, "")
       .trim();
+    out = substituteContactTokens(out, { name: recipientName || recipientFirstName, firstName: recipientFirstName });
     res.json({ ok: true, text: out });
   } catch (err) {
     req.log.error({ err }, "[/emails/rewrite] failed");
