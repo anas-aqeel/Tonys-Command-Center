@@ -245,6 +245,12 @@ export function CheckinGate({ initial, onComplete }: Props) {
           style={{ ...btn1, width: "100%", opacity: (saving || !ck.bed || !ck.wake) ? 0.6 : 1 }}>
           {saving ? "Checking..." : !ck.bed || !ck.wake ? "Enter Bedtime & Wake Time" : "Let's Go →"}
         </button>
+        {/* H1 (Tony's 2026-05-16 PDF): surface where this lands. */}
+        <div style={{
+          marginTop: 14, fontSize: 11, color: C.mut, lineHeight: 1.5, textAlign: "center",
+        }}>
+          Saved to <strong style={{ color: C.sub }}>TCC_Personal_Checkin</strong>.
+        </div>
       </div>
     </div>
   );

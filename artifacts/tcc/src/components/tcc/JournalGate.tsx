@@ -104,6 +104,14 @@ export function JournalGate({ onComplete }: Props) {
               {saving ? "AI Formatting..." : "Save & Continue →"}
             </button>
           </div>
+          {/* H1 (Tony's 2026-05-16 PDF): surface where this lands so Tony knows
+              the entry is being persisted and where to find historical entries. */}
+          <div style={{
+            marginTop: 14, fontSize: 11, color: C.mut, lineHeight: 1.5,
+            paddingTop: 12, borderTop: `1px solid ${C.brd}`,
+          }}>
+            Saved to <strong style={{ color: C.sub }}>TCC_Daily_Journal</strong> (Google Doc · 5-minute sync). AI formats Mood / Key Events / Reflection sections before save.
+          </div>
         </div>
       </div>
     </div>
