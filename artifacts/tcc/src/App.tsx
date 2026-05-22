@@ -919,7 +919,18 @@ export default function App() {
         briefLoaded={sectionsLoaded.calendar}
         lastEmailAiAt={lastEmailAiAt}
         onComplete={handleTaskComplete}
-        onNavigate={v => persistView(v as View)}
+        onNavigate={v => {
+          // Dashboard emits NavView ("tasks" | "emails" | "schedule" | "sales").
+          // The parent's View enum doesn't have a top-level "tasks" — the master
+          // task list lives inside BusinessView, sub-tab "tasks". Tony's
+          // 2026-05-16 feedback: "Links is sending me to calendar not tasks list".
+          if (v === "tasks") {
+            setBusinessTab("tasks");
+            persistView("business");
+            return;
+          }
+          persistView(v as View);
+        }}
         onOpenEmail={em => setEmailCompose({ threadId: em.gmailMessageId, subject: `Re: ${em.subj}` })}
         onAttempt={c => setAttempt(c)}
         onCompose={c => setEmailCompose({ to: c.email || "", contactId: String(c.id), contactName: c.name })}
