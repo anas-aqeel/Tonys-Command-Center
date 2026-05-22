@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { eq, gte, ilike, desc as descOrder, sql as sqlExpr, inArray } from "drizzle-orm";
-import { db, dailyBriefsTable, businessContextTable, checkinsTable, taskCompletionsTable, callLogTable, contactsTable, sectionCacheTable } from "@workspace/db";
+import { db, dailyBriefsTable, businessContextTable, checkinsTable, taskCompletionsTable, callLogTable, contactsTable, sectionCacheTable, slackMentionsAckedTable } from "@workspace/db";
 import { communicationLogTable, contactIntelligenceTable } from "../../lib/schema-v2.js";
 import { anthropic, createTrackedMessage } from "@workspace/integrations-anthropic-ai";
 import { isAgentRuntimeEnabled } from "../../agents/flags.js";
@@ -460,7 +460,16 @@ async function fetchLiveSlack(): Promise<SlackItem[] | null> {
     // If we got nothing from channels OR DMs, return null → seed fallback
     if (items.length === 0 && !chanRes.ok && !imRes.ok) return null;
 
-    const limited = items.slice(0, 5);
+    // D2 (Tony's 2026-05-16): drop mentions Tony has already acked. The ack
+    // table is small + queried by ts (primary key), so look up the full set
+    // of acked-ts in one query and filter in-memory.
+    const ackedTsSet = await db.select({ ts: slackMentionsAckedTable.ts })
+      .from(slackMentionsAckedTable)
+      .then(rows => new Set(rows.map(r => r.ts)))
+      .catch(() => new Set<string>());
+    const unacked = items.filter(i => !i.ts || !ackedTsSet.has(i.ts));
+
+    const limited = unacked.slice(0, 5);
 
     // D1 (Tony's 2026-05-16): resolve a real Slack permalink for each item so
     // "Open ↗" jumps to the actual message instead of falling back to the
@@ -1002,6 +1011,36 @@ router.get("/brief/slack", async (_req, res): Promise<void> => {
     fetchedAt: cached?.fetchedAt ?? null,
     source: cached ? "cached-stale" : "unavailable",
   });
+});
+
+// ── POST /brief/slack/mentions/:ts/ack ──────────────────────────────────────
+// D2 (Tony's 2026-05-16): Tony acknowledges a mention so it stops surfacing
+// on the dashboard. Idempotent — re-acking is a no-op. The dashboard's
+// /brief/slack response already filters acked-ts out (see fetchLiveSlack).
+//
+// Param ts is URL-encoded by the caller (Slack timestamps include a dot).
+router.post("/brief/slack/mentions/:ts/ack", async (req, res): Promise<void> => {
+  const ts = decodeURIComponent(req.params.ts);
+  const { channelId } = req.body as { channelId?: string };
+  if (!ts) { res.status(400).json({ error: "ts required" }); return; }
+  if (!channelId) { res.status(400).json({ error: "channelId required" }); return; }
+
+  try {
+    await db.insert(slackMentionsAckedTable)
+      .values({ ts, channelId })
+      .onConflictDoNothing();
+    // Also drop from the section cache so the next /brief/slack read doesn't
+    // surface this mention from cached state.
+    const cached = await readCache("slack");
+    if (cached && Array.isArray(cached.data)) {
+      const filtered = (cached.data as SlackItem[]).filter(i => i.ts !== ts);
+      await writeCache("slack", filtered);
+    }
+    res.json({ ok: true, ts });
+  } catch (err) {
+    req.log.warn({ err }, "[slack ack] failed");
+    res.status(500).json({ error: "Ack failed" });
+  }
 });
 
 // ── POST /brief/calendar/refetch ────────────────────────────────────────────

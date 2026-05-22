@@ -53,6 +53,8 @@ interface Props {
   onRefresh?: (sources: string[]) => void;
   onDismissWarning?: () => void;
   onPrint?: () => void;
+  /** D2 — Tony clicks ✓ to acknowledge / dismiss a Slack mention. */
+  onSlackAck?: (item: SlackItem) => void;
 }
 
 const ALL_SOURCES = ["emails", "calendar", "slack", "linear", "ai"];
@@ -89,7 +91,7 @@ const topLevel = (items: { level: string }[]) => {
   return "low";
 };
 
-export function Header({ clock, ideas, unresolved, snoozedCount = 0, calSide, eod, customTips: _customTips, lastRefresh, refreshing, slackItems = [], linearItems = [], meetingWarning, onSetView, onToggleCal, onShowIdea, onShowChat, onShowCheckin, onEod, onTipSaved: _onTipSaved, onRefresh, onDismissWarning, onPrint }: Props) {
+export function Header({ clock, ideas, unresolved, snoozedCount = 0, calSide, eod, customTips: _customTips, lastRefresh, refreshing, slackItems = [], linearItems = [], meetingWarning, onSetView, onToggleCal, onShowIdea, onShowChat, onShowCheckin, onEod, onTipSaved: _onTipSaved, onRefresh, onDismissWarning, onPrint, onSlackAck }: Props) {
   const [open, setOpen] = useState(false);
   const [dismissedHighUrgency, setDismissedHighUrgency] = useState(false);
   const [showSlackPopover, setShowSlackPopover] = useState(false);
@@ -308,6 +310,9 @@ export function Header({ clock, ideas, unresolved, snoozedCount = 0, calSide, eo
                     : item.channel
                       ? `slack://channel?team=&id=${item.channel}`
                       : "slack://open";
+                  // D2: Ack only meaningful when we have the ts (channel id +
+                  // ts together form the unique key the BE persists).
+                  const canAck = !!(item.ts && item.channelId && onSlackAck);
                   return (
                     <div key={i} style={{ padding: "9px 14px", borderBottom: i < slackItems.length - 1 ? `1px solid ${C.brd}` : "none" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
@@ -315,9 +320,24 @@ export function Header({ clock, ideas, unresolved, snoozedCount = 0, calSide, eo
                           {item.level || "low"}
                         </span>
                         {item.channel && <span style={{ fontSize: 11, color: C.mut }}>{item.channel}</span>}
-                        <a href={slackDeepLink} target={item.url && item.url.startsWith("http") ? "_blank" : "_self"} rel="noopener noreferrer" style={{ marginLeft: "auto", fontSize: 10, color: C.blu, textDecoration: "none", fontWeight: 600, whiteSpace: "nowrap" }}>
-                          Open ↗
-                        </a>
+                        <div style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 8 }}>
+                          {canAck && (
+                            <button
+                              onClick={() => onSlackAck!(item)}
+                              title="Mark as handled — removes from this dashboard"
+                              style={{
+                                background: "none", border: `1px solid ${C.grn}55`,
+                                color: C.grn, fontSize: 10, fontWeight: 700,
+                                padding: "2px 8px", borderRadius: 5, cursor: "pointer", fontFamily: F,
+                              }}
+                            >
+                              ✓ Ack
+                            </button>
+                          )}
+                          <a href={slackDeepLink} target={item.url && item.url.startsWith("http") ? "_blank" : "_self"} rel="noopener noreferrer" style={{ fontSize: 10, color: C.blu, textDecoration: "none", fontWeight: 600, whiteSpace: "nowrap" }}>
+                            Open ↗
+                          </a>
+                        </div>
                       </div>
                       <div style={{ fontSize: 12, color: C.tx, lineHeight: 1.45 }}>
                         {item.from && <span style={{ fontWeight: 700 }}>{item.from}: </span>}

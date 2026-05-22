@@ -110,6 +110,18 @@ export const callLogTable = pgTable("call_log", {
   index("call_log_created_idx").on(t.createdAt),
 ]);
 
+// D2 (Tony's 2026-05-16): per-message ack so the dashboard dropdown stops
+// surfacing Slack mentions that Tony's already handled. PK is the Slack
+// message ts (workspace-globally unique within a channel; we also store
+// channelId for completeness). acked_by is null in the single-user world
+// today; lights up when multi-user (G1) lands.
+export const slackMentionsAckedTable = pgTable("slack_mentions_acked", {
+  ts: text("ts").primaryKey(),
+  channelId: text("channel_id").notNull(),
+  ackedAt: timestamp("acked_at", { withTimezone: true }).defaultNow().notNull(),
+  ackedBy: text("acked_by"),
+});
+
 export const contactNotesTable = pgTable("contact_notes", {
   id: uuid("id").defaultRandom().primaryKey(),
   contactId: uuid("contact_id").notNull().references(() => contactsTable.id, { onDelete: "cascade" }),

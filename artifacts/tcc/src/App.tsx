@@ -733,6 +733,25 @@ export default function App() {
       onRefresh={refreshBrief}
       onDismissWarning={() => setMeetingWarning(null)}
       onPrint={() => setPrintMode(true)}
+      // D2 (Tony's 2026-05-16): ack a Slack mention. Optimistic: pull it
+      // from local state immediately so the dropdown updates without a
+      // round-trip; revert if the BE call fails.
+      onSlackAck={async (item) => {
+        if (!item.ts || !item.channelId) return;
+        const prevItems = brief?.slackItems ?? [];
+        setBrief(prev => ({
+          ...(prev ?? {} as DailyBrief),
+          slackItems: prevItems.filter(s => s.ts !== item.ts),
+        }));
+        try {
+          await post(`/brief/slack/mentions/${encodeURIComponent(item.ts)}/ack`, {
+            channelId: item.channelId,
+          });
+        } catch {
+          // Restore on failure
+          setBrief(prev => ({ ...(prev ?? {} as DailyBrief), slackItems: prevItems }));
+        }
+      }}
     />
   );
 
