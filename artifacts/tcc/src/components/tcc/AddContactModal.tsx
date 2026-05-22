@@ -38,27 +38,59 @@ export function AddContactModal({ open, onClose, onCreated }: Props) {
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setForm(prev => ({ ...prev, [k]: e.target.value }));
 
+  // B4 (Tony's 2026-05-16): downscale phone-camera photos before upload so
+  // mobile scans don't fail. A raw iPhone shot is ~4-8 MB (12 MP) which
+  // base64-inflates past Vercel's 4.5 MB body limit. Resize to max 1600 px on
+  // the long edge + re-encode as JPEG q=0.85 → typically ~250-500 KB.
+  async function downscaleToJpeg(file: File, maxEdge = 1600, quality = 0.85): Promise<{ blob: Blob; dataUrl: string }> {
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result as string);
+      r.onerror = () => reject(new Error("Failed to read file"));
+      r.readAsDataURL(file);
+    });
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = () => reject(new Error("Failed to decode image (HEIC files aren't supported — switch your camera to JPEG)"));
+      i.src = dataUrl;
+    });
+    const scale = Math.min(1, maxEdge / Math.max(img.width, img.height));
+    const w = Math.round(img.width * scale);
+    const h = Math.round(img.height * scale);
+    const canvas = document.createElement("canvas");
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Canvas unavailable");
+    ctx.drawImage(img, 0, 0, w, h);
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(b => b ? resolve(b) : reject(new Error("Encode failed")), "image/jpeg", quality);
+    });
+    const outDataUrl = canvas.toDataURL("image/jpeg", quality);
+    return { blob, dataUrl: outDataUrl };
+  }
+
   const handleCardCapture = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Show preview
-    const reader = new FileReader();
-    reader.onload = () => setCardPreview(reader.result as string);
-    reader.readAsDataURL(file);
-
-    // Convert to base64 and send to backend
     setScanning(true);
-    setScanMsg("Scanning business card…");
+    setScanMsg("Preparing image…");
     try {
+      // B4: client-side downscale + re-encode as JPEG. Falls back to a
+      // descriptive error if the image can't be decoded (e.g. HEIC).
+      const { blob, dataUrl } = await downscaleToJpeg(file);
+      setCardPreview(dataUrl);
+
+      setScanMsg("Scanning business card…");
       const base64 = await new Promise<string>((resolve, reject) => {
         const r = new FileReader();
         r.onload = () => {
           const result = r.result as string;
-          resolve(result.split(",")[1]); // strip data:...;base64, prefix
+          resolve(result.split(",")[1]); // strip data:image/jpeg;base64,
         };
-        r.onerror = reject;
-        r.readAsDataURL(file);
+        r.onerror = () => reject(new Error("Re-read failed"));
+        r.readAsDataURL(blob);
       });
 
       const result = await post<{
@@ -67,7 +99,7 @@ export function AddContactModal({ open, onClose, onCreated }: Props) {
         linkedin?: string; notes?: string;
       }>("/contacts/scan-card", {
         imageBase64: base64,
-        mimeType: file.type || "image/jpeg",
+        mimeType: "image/jpeg",
       });
 
       // Pre-fill form with extracted data
@@ -87,8 +119,9 @@ export function AddContactModal({ open, onClose, onCreated }: Props) {
       }));
 
       setScanMsg("Card scanned — review and confirm");
-    } catch {
-      setScanMsg("Scan failed — fill in manually");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Scan failed";
+      setScanMsg(msg.length > 80 ? "Scan failed — fill in manually" : msg);
     } finally {
       setScanning(false);
       // Reset file input so same file can be re-selected
@@ -183,7 +216,10 @@ export function AddContactModal({ open, onClose, onCreated }: Props) {
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/*"
+            // B4 (Tony's 2026-05-16): mobile scan failure was rooted in iPhone
+            // HEIC defaults (Claude Vision rejects HEIC). Limit to JPEG/PNG/WebP
+            // so HEICs are filtered at the OS picker before they hit the network.
+            accept="image/jpeg,image/png,image/webp"
             capture="environment"
             onChange={handleCardCapture}
             style={{ display: "none" }}
