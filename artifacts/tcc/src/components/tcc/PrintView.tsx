@@ -6,6 +6,11 @@ import type { TaskItem, CalItem, EmailItem, SlackItem, LinearItem } from "./type
 interface Contact { name: string; phone?: string; company?: string; nextStep?: string; status?: string; }
 interface LocalTask { id: string; text: string; dueDate?: string | null; taskType?: string | null; size?: string | null; }
 
+// F4 (Tony's 2026-05-16): "Process Scanned Sheet" button is hidden until Tony
+// asks for it back. Backend route POST /sheet-scan/process is untouched —
+// flip this to true to re-surface the button without redeploy of the BE.
+const SHOW_PROCESS_SCANNED_SHEET = false;
+
 interface Props {
   tasks: TaskItem[];
   tDone: Record<string, boolean>;
@@ -314,7 +319,13 @@ export function PrintView({
           <div style={{ fontSize: 11, color: "#777", marginTop: 1 }}>{DATE_STR}</div>
         </div>
         <Btn label={refreshing ? "Refreshing…" : "↻ Refresh"} onClick={handleRefresh} disabled={refreshing} dim />
-        <Btn label={processing ? "Processing…" : "📷 Process Scanned Sheet"} onClick={handleProcessScan} disabled={processing} dim />
+        {/* F4 (Tony's 2026-05-16): "Process Scanned Sheet - Can hide this for now".
+            Toggle here when Tony's ready to re-surface; the backend route still
+            exists at POST /sheet-scan/process so handleProcessScan keeps working
+            if this button comes back. */}
+        {SHOW_PROCESS_SCANNED_SHEET && (
+          <Btn label={processing ? "Processing…" : "📷 Process Scanned Sheet"} onClick={handleProcessScan} disabled={processing} dim />
+        )}
         <Btn label="🖨 Print" onClick={() => {
           const printEl = document.querySelector('.print-only') as HTMLElement;
           if (!printEl) return;
