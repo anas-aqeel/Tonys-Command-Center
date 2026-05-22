@@ -28,11 +28,16 @@ router.post("/send-sms", async (req, res): Promise<void> => {
     ? webhookUrl
     : null;
 
-  if (webhookUrl && !validWebhookUrl) {
-    console.warn("[send-sms] MACRODROID_WEBHOOK_URL does not start with expected domain — skipping webhook");
+  if (!webhookUrl) {
+    console.warn("[send-sms] MACRODROID_WEBHOOK_URL env var is NOT SET — SMS will be logged but never sent. Set this in Vercel project settings.");
+  } else if (!validWebhookUrl) {
+    console.warn(`[send-sms] MACRODROID_WEBHOOK_URL does not start with https://trigger.macrodroid.com/ — current value starts with: ${webhookUrl.slice(0, 40)}...`);
   }
 
+  // B8 (Tony's 2026-05-16): track triggered separately from status so the FE
+  // can show "the URL fired but returned non-2xx" vs "the URL never fired".
   let macrodroidOk = false;
+  let webhookStatus: number | null = null;
   if (validWebhookUrl) {
     try {
       const resp = await fetch(validWebhookUrl, {
@@ -41,9 +46,14 @@ router.post("/send-sms", async (req, res): Promise<void> => {
         body: JSON.stringify({ phone_number, message }),
         signal: AbortSignal.timeout(8000),
       });
+      webhookStatus = resp.status;
       macrodroidOk = resp.ok;
+      if (!resp.ok) {
+        const bodyText = await resp.text().catch(() => "");
+        console.warn(`[send-sms] MacroDroid webhook returned ${resp.status}. Body (truncated): ${bodyText.slice(0, 200)}`);
+      }
     } catch (err) {
-      console.error("[send-sms] MacroDroid webhook error:", err);
+      console.error("[send-sms] MacroDroid webhook error:", err instanceof Error ? err.message : err);
       macrodroidOk = false;
     }
   }
@@ -85,6 +95,7 @@ router.post("/send-sms", async (req, res): Promise<void> => {
     sent: true,
     macrodroid_triggered: macrodroidOk,
     macrodroid_configured: !!validWebhookUrl,
+    macrodroid_status: webhookStatus,
     log_id: entry.id,
   });
 });

@@ -21,14 +21,26 @@ export function SmsModal({ contact, onClose }: Props) {
     setSending(true);
     setError("");
     try {
-      const data = await post<{ sent?: boolean; macrodroid_configured?: boolean }>("/send-sms", {
+      const data = await post<{ sent?: boolean; macrodroid_configured?: boolean; macrodroid_triggered?: boolean }>("/send-sms", {
         phone_number: contact.phone,
         message: message.trim(),
         contact_id: String(contact.id),
       });
       setSent(true);
+      // B8 (Tony's 2026-05-16): surface the exact delivery state instead of
+      // silently saying "Sent ✓" when MacroDroid failed.
+      //   - configured + triggered → real success
+      //   - configured but NOT triggered → URL exists but the webhook 4xx/5xx'd
+      //     (typical when the macro was deleted or rebuilt — URL is stale)
+      //   - not configured → env var missing on the server
       if (!data.macrodroid_configured) {
-        setError("Logged! (MacroDroid webhook not configured — SMS not sent from phone yet)");
+        setError("Logged, but MacroDroid webhook is not configured on the server. SMS will not arrive on your phone until MACRODROID_WEBHOOK_URL is set.");
+        // Don't auto-close — Tony needs to see the message.
+        return;
+      }
+      if (!data.macrodroid_triggered) {
+        setError("Logged, but the MacroDroid webhook call failed. Likely causes: (1) the macro URL has changed on your phone — regenerate and update MACRODROID_WEBHOOK_URL, or (2) the MacroDroid app permissions were revoked. Open MacroDroid → Trigger History to check.");
+        return;
       }
       setTimeout(onClose, 1800);
     } catch (err) {
