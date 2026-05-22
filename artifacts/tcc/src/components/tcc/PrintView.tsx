@@ -4,6 +4,7 @@ import { get, post } from "@/lib/api";
 import type { TaskItem, CalItem, EmailItem, SlackItem, LinearItem } from "./types";
 
 interface Contact { name: string; phone?: string; company?: string; nextStep?: string; status?: string; }
+interface LocalTask { id: string; text: string; dueDate?: string | null; taskType?: string | null; size?: string | null; }
 
 interface Props {
   tasks: TaskItem[];
@@ -199,6 +200,14 @@ export function PrintView({
   const [inboxEmail, setInboxEmail] = useState<string>("");
   const [processing, setProcessing] = useState(false);
   const [processResult, setProcessResult] = useState<string | null>(null);
+  // F1 (Tony's 2026-05-16): include the actual to-do list on the printout.
+  const [localTasks, setLocalTasks] = useState<LocalTask[]>([]);
+
+  useEffect(() => {
+    get<LocalTask[]>("/tasks/local")
+      .then(d => { if (Array.isArray(d)) setLocalTasks(d); })
+      .catch(() => {});
+  }, []);
 
   const toggle = useCallback((id: string) => {
     setDone(prev => {
@@ -246,10 +255,24 @@ export function PrintView({
   // Data
   const top3 = tasks.filter(t => !tDone[t.id] && !t.sales).slice(0, 3);
   const callList = topCallContacts.slice(0, 10);
-  const meetings = calendarData.filter(c => c.real);
+  // F1 (Tony's 2026-05-16): include ALL calendar events on the print sheet —
+  // the previous .filter(c => c.real) hid solo focus blocks, which was Tony's
+  // "Missing... Today's calendar". Cap to 9 rows so it still fits the layout.
+  const meetings = calendarData.slice(0, 9);
   const emails = emailsImportant.slice(0, 8);
   const linActive = linearItems.slice(0, 30);
   const slackActive = slackItems.slice(0, 8);
+  // F1: filter to ACTIVE local tasks not already done; cap to ~10 for the
+  // back-page section. Sort by due date ascending (no date = end).
+  const todoList = localTasks
+    .slice()
+    .sort((a, b) => {
+      if (a.dueDate && b.dueDate) return a.dueDate.localeCompare(b.dueDate);
+      if (a.dueDate) return -1;
+      if (b.dueDate) return 1;
+      return 0;
+    })
+    .slice(0, 10);
   const ramiItems = linActive.filter(l => (l.who || "").toLowerCase().includes("rami") || (l.who || "").toLowerCase().includes("ramy") || (l.who || "").toLowerCase().includes("remy"));
   const ethanItems = linActive.filter(l => (l.who || "").toLowerCase().includes("ethan"));
   const workBlocks = computeWorkBlocks(meetings);
@@ -309,7 +332,7 @@ export function PrintView({
         <label style={{ fontSize: 9, color: "#666", letterSpacing: 1.5, fontWeight: 700, textTransform: "uppercase", fontFamily: F, alignSelf: "flex-start", marginLeft: `calc(50% - ${PAGE_W / 2}px)` }}>PAGE 1 — FRONT</label>
         <FrontPage callList={callList} top3={top3} meetings={meetings} workBlocks={workBlocks} inboxEmail={inboxEmail} ck={ck} toggle={toggle} className="no-print-shadow" />
         <label style={{ fontSize: 9, color: "#666", letterSpacing: 1.5, fontWeight: 700, textTransform: "uppercase", fontFamily: F, alignSelf: "flex-start", marginLeft: `calc(50% - ${PAGE_W / 2}px)` }}>PAGE 2 — BACK</label>
-        <BackPage linActive={linActive} ramiItems={ramiItems} ethanItems={ethanItems} emails={emails} slackActive={slackActive} workBlocks={workBlocks} ck={ck} toggle={toggle} className="no-print-shadow" />
+        <BackPage linActive={linActive} ramiItems={ramiItems} ethanItems={ethanItems} emails={emails} slackActive={slackActive} workBlocks={workBlocks} ck={ck} toggle={toggle} todoList={todoList} className="no-print-shadow" />
         <div style={{ fontSize: 10, color: "#555", fontFamily: F, textAlign: "center", paddingBottom: 8 }}>
           Print → Portrait · Letter · 2 pages (front &amp; back of one sheet)
         </div>
@@ -318,7 +341,7 @@ export function PrintView({
       {/* ── Actual print pages (only visible when printing) ── */}
       <div className="print-only" style={{ display: "none" }}>
         <FrontPage callList={callList} top3={top3} meetings={meetings} workBlocks={workBlocks} inboxEmail={inboxEmail} ck={ck} toggle={toggle} className="print-page" />
-        <BackPage linActive={linActive} ramiItems={ramiItems} ethanItems={ethanItems} emails={emails} slackActive={slackActive} workBlocks={workBlocks} ck={ck} toggle={toggle} className="print-page" />
+        <BackPage linActive={linActive} ramiItems={ramiItems} ethanItems={ethanItems} emails={emails} slackActive={slackActive} workBlocks={workBlocks} ck={ck} toggle={toggle} todoList={todoList} className="print-page" />
       </div>
 
       <style>{`
@@ -516,7 +539,7 @@ function FrontPage({ callList, top3, meetings, workBlocks, inboxEmail, ck, toggl
 // PAGE 2 — BACK
 // Layout: [Linear full] → [Rami | Ethan 50/50] → [Emails full] → [Slack full]
 // ─────────────────────────────────────────────────────────────────────────────
-function BackPage({ linActive, ramiItems, ethanItems, emails, slackActive, workBlocks, ck, toggle, className }: {
+function BackPage({ linActive, ramiItems, ethanItems, emails, slackActive, workBlocks, ck, toggle, todoList = [], className }: {
   linActive: LinearItem[];
   ramiItems: LinearItem[];
   ethanItems: LinearItem[];
@@ -525,6 +548,8 @@ function BackPage({ linActive, ramiItems, ethanItems, emails, slackActive, workB
   workBlocks: { salesCalls?: string; tasks?: string; emails?: string };
   ck: (id: string) => boolean;
   toggle: (id: string) => void;
+  /** F1 (Tony's 2026-05-16): active local to-dos for today's print sheet. */
+  todoList?: LocalTask[];
   className?: string;
 }) {
   const renderPersonRows = (items: LinearItem[], prefix: string, max = 4) => {
@@ -572,6 +597,39 @@ function BackPage({ linActive, ramiItems, ethanItems, emails, slackActive, workB
     <Page className={className}>
       <PageHeader title="OPERATIONS & AWARENESS" sub="North Star: 2 deals/month/AA @ $2,500 per acquisition. Everything else is noise." />
       <div style={{ padding: "10px 18px" }}>
+
+        {/* ══ TO-DOS — full width (F1: Tony's 2026-05-16 ask) ══ */}
+        {todoList.length > 0 && (
+          <>
+            <SL text={`✅ Today's To-Dos · ${todoList.length} open`} color="#16A34A" />
+            <table style={{ width: "100%", borderCollapse: "collapse", border: BORDER, marginBottom: 10 }}>
+              <thead>
+                <tr>
+                  <TH w={20} center>✓</TH>
+                  <TH>TASK</TH>
+                  <TH w={80}>DUE</TH>
+                  <TH w={60}>TYPE</TH>
+                  <TH w={50}>SIZE</TH>
+                </tr>
+              </thead>
+              <tbody>
+                {todoList.map((t, i) => {
+                  const id = `todo-${t.id}`;
+                  const isDone = ck(id);
+                  return (
+                    <tr key={id} style={{ background: i % 2 === 0 ? "#fff" : "#FAFAFA" }}>
+                      <TD center><CB id={id} done={isDone} onToggle={toggle} /></TD>
+                      <TD strike={isDone} small>{t.text}</TD>
+                      <TD small dim noWrap>{t.dueDate || "—"}</TD>
+                      <TD small dim>{t.taskType || "—"}</TD>
+                      <TD small dim>{t.size || "—"}</TD>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </>
+        )}
 
         {/* ══ LINEAR — FULL WIDTH ══ */}
         <SL text="⚡ Linear — Engineering in Progress" color="#2563EB" />
