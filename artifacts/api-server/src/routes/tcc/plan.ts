@@ -484,7 +484,10 @@ router.get("/plan/tasks", async (req, res): Promise<void> => {
   }
 });
 
-// GET /plan/top3 — top 3 highest-priority active tasks across all categories
+// GET /plan/top3 — top 3 highest-priority active tasks across all categories.
+// Tony's 2026-05-16 ask: order by Priority P0→P2 first, then Due Date inside
+// each priority bucket (sooner first; undated last). Always returns up to 3
+// items as long as any active tasks exist.
 router.get("/plan/top3", async (_req, res): Promise<void> => {
   try {
     // Fetch ALL active tasks so sprint ID computation has full context
@@ -495,10 +498,22 @@ router.get("/plan/top3", async (_req, res): Promise<void> => {
     // Assign sprint IDs using full context
     const withSprintIds = assignSprintIds(allActive);
 
-    // Pick top 3: P0 first (by priorityOrder within category), then P1 as fallback
-    const p0 = withSprintIds.filter(t => t.priority === "P0");
-    const p1 = withSprintIds.filter(t => t.priority === "P1");
-    const top3 = [...p0, ...p1].slice(0, 3);
+    // Within a priority bucket: dated tasks first (sorted ascending), then
+    // undated tasks (ordered by existing priorityOrder fallback).
+    type PlanRow = typeof withSprintIds[number];
+    const byDueDate = (a: PlanRow, b: PlanRow): number => {
+      const ad = a.dueDate ?? null;
+      const bd = b.dueDate ?? null;
+      if (ad && bd) return ad.localeCompare(bd);
+      if (ad) return -1;
+      if (bd) return 1;
+      return (a.priorityOrder ?? 999) - (b.priorityOrder ?? 999);
+    };
+
+    const p0 = withSprintIds.filter(t => t.priority === "P0").sort(byDueDate);
+    const p1 = withSprintIds.filter(t => t.priority === "P1").sort(byDueDate);
+    const p2 = withSprintIds.filter(t => t.priority === "P2").sort(byDueDate);
+    const top3 = [...p0, ...p1, ...p2].slice(0, 3);
 
     res.json({ tasks: top3 });
   } catch (err) {
