@@ -732,7 +732,19 @@ export default function App() {
       onTipSaved={handleTipSaved}
       onRefresh={refreshBrief}
       onDismissWarning={() => setMeetingWarning(null)}
-      onPrint={() => setPrintMode(true)}
+      onPrint={() => {
+        // Print sheet needs data from EVERY section (calendar / emails /
+        // linear / contacts / calls). Per-view loaders only fire what the
+        // current view displays, so opening Print from e.g. Sales or
+        // Business shows empty cells. Kick off all loaders before flipping
+        // into print mode. Each loader short-circuits if already loaded.
+        loadCalendar();
+        loadEmails();
+        loadLinear();
+        loadContacts();
+        loadCalls();
+        setPrintMode(true);
+      }}
       // D2 (Tony's 2026-05-16): ack a Slack mention. Optimistic: pull it
       // from local state immediately so the dropdown updates without a
       // round-trip; revert if the BE call fails.
