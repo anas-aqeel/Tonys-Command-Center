@@ -244,6 +244,13 @@ export const planItemsTable = pgTable("plan_items", {
   executionTier: text("execution_tier"),
   taskType: text("task_type").default("master"),
   parentTaskId: uuid("parent_task_id"),
+  // Highlight feature (Tony's 2026-05-16 screenshare + PDF "Ability to Add
+  // Notes and Highlight"). Color = which "focus bucket" the task is in (e.g.
+  // yellow = Ramy, blue = Ethan, or any per-task choice). Note = short text
+  // shown on hover. Highlighted tasks must have a dueDate (FE enforces).
+  highlightColor: text("highlight_color"),
+  highlightNote: text("highlight_note"),
+  highlightAt: timestamp("highlight_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
 }, (table) => [

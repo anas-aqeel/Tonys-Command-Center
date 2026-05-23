@@ -4,6 +4,7 @@ import { C, F } from "@/components/tcc/constants";
 import { IdeasView } from "@/components/tcc/IdeasView";
 import { showTrainNowToast } from "@/lib/trainNowToast";
 import { LinearAttachPicker } from "@/components/tcc/LinearAttachPicker";
+import { HighlightPicker, highlightHex } from "@/components/tcc/HighlightPicker";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -30,6 +31,10 @@ type PlanItem = {
   sprintId?: string;
   taskType?: "master" | "subtask" | "note" | null;
   parentTaskId?: string | null;
+  // Highlight feature: color marks the task as "in focus", note shows on hover.
+  highlightColor?: string | null;
+  highlightNote?: string | null;
+  highlightAt?: string | null;
 };
 
 type SubcategoryWithTasks = PlanItem & { tasks: PlanItem[]; totalTasks: number; completedTasks: number };
@@ -1184,6 +1189,9 @@ function TaskDetailModal({ task, onClose, onSaved }: {
     source: task.source || "manual",
     linearId: task.linearId || "",
     coOwner: task.coOwner || "",
+    // Highlight feature: optional color + note. Cleared together via the picker.
+    highlightColor: task.highlightColor || "",
+    highlightNote: task.highlightNote || "",
   });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -1214,13 +1222,30 @@ function TaskDetailModal({ task, onClose, onSaved }: {
     if (!form.category) { setValidationErr("Category is required"); return; }
     if (!form.owner) { setValidationErr("Owner is required"); return; }
     if (!form.priority) { setValidationErr("Priority is required"); return; }
+    // Highlight rule (Tony's 2026-05-16 PDF): highlighted tasks must have a due date.
+    if (form.highlightColor && !form.dueDate) {
+      setValidationErr("Highlighted tasks must have a due date.");
+      return;
+    }
     setValidationErr("");
     setSaving(true);
     try {
-      await patch(`/plan/item/${task.id}`, form);
+      // Convert empty strings to nulls for the highlight columns so a cleared
+      // highlight wipes the row (BE PATCH handler triggers the highlightAt /
+      // highlightNote reset when highlightColor is falsy).
+      const payload = {
+        ...form,
+        highlightColor: form.highlightColor || null,
+        highlightNote: form.highlightColor ? (form.highlightNote || null) : null,
+      };
+      await patch(`/plan/item/${task.id}`, payload);
       setSaved(true);
       setTimeout(() => { onSaved(); onClose(); }, 600);
-    } catch { /**/ }
+    } catch (err) {
+      // Surface BE-side validation errors (e.g. highlight w/o due date).
+      const msg = err instanceof Error ? err.message : "Save failed";
+      setValidationErr(msg.slice(0, 200));
+    }
     finally { setSaving(false); }
   }
 
@@ -1359,6 +1384,18 @@ function TaskDetailModal({ task, onClose, onSaved }: {
               Source is "Linear" but no issues attached yet.
             </div>
           )}
+
+          {/* Highlight feature (Tony's 2026-05-16 screenshare + PDF). */}
+          <HighlightPicker
+            color={form.highlightColor || null}
+            note={form.highlightNote || null}
+            hasDueDate={!!form.dueDate}
+            onChange={next => setForm(p => ({
+              ...p,
+              highlightColor: next.color ?? "",
+              highlightNote: next.note ?? "",
+            }))}
+          />
 
           <div>
             <label style={lbl}>Atomic KPI</label>
@@ -2335,8 +2372,17 @@ function MasterTaskTab({ onRefreshAll, categories, initialParentFilter, onInitia
                   {/* Task title — with tree indent for subs/notes.
                       overflowWrap: anywhere lets long URLs (no whitespace)
                       break mid-string so the cell respects maxWidth instead of
-                      bleeding into adjacent columns. */}
-                  <td style={{ padding: "8px 10px", maxWidth: 220, minWidth: 140, overflowWrap: "anywhere", wordBreak: "break-word" }}>
+                      bleeding into adjacent columns.
+                      Highlight feature (Tony's 2026-05-16): if task is
+                      highlighted, render a colored left-edge bar + a small
+                      circle dot next to the title. Hover the dot to see the
+                      highlight note (native title tooltip). */}
+                  <td style={{
+                    padding: "8px 10px", maxWidth: 220, minWidth: 140,
+                    overflowWrap: "anywhere", wordBreak: "break-word",
+                    borderLeft: highlightHex(task.highlightColor) ? `4px solid ${highlightHex(task.highlightColor)}` : undefined,
+                    paddingLeft: highlightHex(task.highlightColor) ? 6 : 10,
+                  }}>
                     <span style={{
                       fontSize: task.taskType === "note" ? 11 : 12,
                       color: done ? C.mut : task.taskType === "note" ? C.sub : C.tx,
@@ -2348,6 +2394,19 @@ function MasterTaskTab({ onRefreshAll, categories, initialParentFilter, onInitia
                       fontWeight: (task.taskType ?? "master") === "master" ? 600 : 400,
                     }}>
                       {(task.taskType === "subtask" || task.taskType === "note") && <span style={{ color: C.mut, marginRight: 4 }}>↳</span>}
+                      {highlightHex(task.highlightColor) && (
+                        <span
+                          title={task.highlightNote || `Highlighted (${task.highlightColor})`}
+                          style={{
+                            display: "inline-block",
+                            width: 9, height: 9, borderRadius: "50%",
+                            background: highlightHex(task.highlightColor) || undefined,
+                            marginRight: 6, verticalAlign: "middle",
+                            cursor: "help",
+                            border: "1px solid rgba(0,0,0,0.15)",
+                          }}
+                        />
+                      )}
                       {task.title}
                     </span>
                   </td>

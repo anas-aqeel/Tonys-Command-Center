@@ -606,10 +606,32 @@ router.post("/plan/task/:id/uncomplete", async (req, res): Promise<void> => {
 router.patch("/plan/item/:id", async (req, res): Promise<void> => {
   try {
     const { id } = req.params;
-    const allowed = ["title","owner","coOwner","priority","dueDate","status","workNotes","atomicKpi","source","executionTier","linearId","subcategory"];
+    const allowed = ["title","owner","coOwner","priority","dueDate","status","workNotes","atomicKpi","source","executionTier","linearId","subcategory","highlightColor","highlightNote"];
     const updates: Record<string, unknown> = { updatedAt: new Date() };
     for (const key of allowed) {
       if (req.body[key] !== undefined) updates[key] = req.body[key];
+    }
+    // Highlight feature: setting highlightColor stamps highlightAt; clearing
+    // (passing null/empty) wipes both note + timestamp so the row becomes
+    // un-highlighted cleanly.
+    if ("highlightColor" in req.body) {
+      const c = req.body.highlightColor;
+      if (c) {
+        updates.highlightAt = new Date();
+        // Server-side guard for the FE's "highlighted tasks must have a due
+        // date" rule. We look up the current row first to know its dueDate
+        // and the incoming-patch dueDate to decide.
+        const [current] = await db.select({ dueDate: planItemsTable.dueDate }).from(planItemsTable).where(eq(planItemsTable.id, id)).limit(1);
+        const willHaveDueDate = req.body.dueDate !== undefined ? !!req.body.dueDate : !!current?.dueDate;
+        if (!willHaveDueDate) {
+          res.status(400).json({ error: "Highlighted tasks must have a due date." });
+          return;
+        }
+      } else {
+        // Clearing the color clears the note + timestamp too.
+        updates.highlightAt = null;
+        updates.highlightNote = null;
+      }
     }
     const [updated] = await db.update(planItemsTable).set(updates).where(eq(planItemsTable.id, id)).returning();
     if (!updated) { res.status(404).json({ error: "Not found" }); return; }
