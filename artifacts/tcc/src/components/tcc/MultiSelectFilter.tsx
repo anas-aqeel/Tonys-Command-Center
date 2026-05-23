@@ -77,7 +77,7 @@ export function MultiSelectFilter({
       {open && (
         <div style={{
           position: "absolute", top: "100%", left: 0, marginTop: 4, zIndex: 50,
-          minWidth: 180, maxHeight: 280, overflowY: "auto",
+          minWidth: 180, maxWidth: 220, width: "max-content", maxHeight: 280, overflowY: "auto",
           background: "#fff", border: `1px solid ${C.brd}`, borderRadius: 8,
           boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
           padding: 4,
