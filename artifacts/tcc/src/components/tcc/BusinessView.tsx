@@ -4,7 +4,7 @@ import { C, F } from "@/components/tcc/constants";
 import { IdeasView } from "@/components/tcc/IdeasView";
 import { showTrainNowToast } from "@/lib/trainNowToast";
 import { LinearAttachPicker } from "@/components/tcc/LinearAttachPicker";
-import { HighlightPicker, highlightHex } from "@/components/tcc/HighlightPicker";
+import { HighlightPicker, highlightHex, HIGHLIGHT_COLORS } from "@/components/tcc/HighlightPicker";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1549,6 +1549,8 @@ function MasterTaskTab({ onRefreshAll, categories, initialParentFilter, onInitia
   const [filterWeek, setFilterWeek] = useState("");
   const [filterParent, setFilterParent] = useState(initialParentFilter || "");
   const [filterLinearOnly, setFilterLinearOnly] = useState(false);
+  // Highlight filter: '' = no filter, 'any' = any highlight, '<color>' = that specific color.
+  const [filterHighlight, setFilterHighlight] = useState<string>("");
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
 
   // E1: apply incoming category filter when prop changes (e.g. user clicked
@@ -1658,6 +1660,12 @@ function MasterTaskTab({ onRefreshAll, categories, initialParentFilter, onInitia
   if (filterLinearOnly) {
     // Linear-only: source is "Linear" OR row has a linearId (covers edge cases where source wasn't set explicitly)
     displayed = displayed.filter(t => t.source === "Linear" || !!t.linearId);
+  }
+  if (filterHighlight) {
+    // Highlight filter: 'any' = any highlight set, otherwise match specific color value
+    displayed = filterHighlight === "any"
+      ? displayed.filter(t => !!t.highlightColor)
+      : displayed.filter(t => t.highlightColor === filterHighlight);
   }
   if (searchQ.trim()) {
     const q = searchQ.trim().toLowerCase();
@@ -2179,6 +2187,41 @@ function MasterTaskTab({ onRefreshAll, categories, initialParentFilter, onInitia
               fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: F, whiteSpace: "nowrap",
             }}
           >◼ Linear only</button>
+          {/* Highlight filter — "Any" shows all highlighted; specific color narrows to that. */}
+          {(() => {
+            const active = !!filterHighlight;
+            const activeHex = filterHighlight && filterHighlight !== "any" ? highlightHex(filterHighlight) : null;
+            return (
+              <div style={{ position: "relative", display: "inline-flex", alignItems: "center" }}>
+                <select
+                  value={filterHighlight}
+                  onChange={e => setFilterHighlight(e.target.value)}
+                  title="Filter to highlighted tasks (any color or a specific one)"
+                  style={{
+                    padding: "4px 11px", paddingLeft: activeHex ? 26 : 11, borderRadius: 20,
+                    border: `1px solid ${active ? (activeHex || "#F59E0B") : C.brd}`,
+                    background: active ? (activeHex ? `${activeHex}18` : "#FEF3C7") : "transparent",
+                    color: active ? (activeHex || "#92400E") : C.sub,
+                    fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: F, whiteSpace: "nowrap",
+                    appearance: "none", WebkitAppearance: "none", MozAppearance: "none",
+                  }}
+                >
+                  <option value="">★ All</option>
+                  <option value="any">★ Any highlight</option>
+                  {HIGHLIGHT_COLORS.map(c => (
+                    <option key={c.value} value={c.value}>● {c.label}</option>
+                  ))}
+                </select>
+                {activeHex && (
+                  <span style={{
+                    position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)",
+                    width: 10, height: 10, borderRadius: "50%", background: activeHex,
+                    pointerEvents: "none", border: "1px solid rgba(0,0,0,0.15)",
+                  }} />
+                )}
+              </div>
+            );
+          })()}
           <span style={{ marginLeft: "auto", fontSize: 11, color: C.mut }}>
             {loading ? "Loading…" : `${displayed.length} tasks`}
           </span>
