@@ -4,6 +4,7 @@ import { C, F, PC, PCBg, SC, PIPELINE_STAGES, LEAD_SOURCES, STATUS_OPTIONS, CONT
 import { VoiceField } from "./VoiceField";
 import { PainPointsSelect } from "./PainPointsSelect";
 import { MultiSelectFilter } from "./MultiSelectFilter";
+import { LinksEditor, type TaskLink } from "./LinksEditor";
 import { showToast } from "./Toast";
 import type { Contact, ContactNote, CallEntry } from "./types";
 
@@ -61,7 +62,7 @@ export function ContactDrawer({ contactId, onClose, onUpdated, onDeleted, onAtte
   const [hasChanges, setHasChanges] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [activeTab, setActiveTab] = useState<"details" | "notes" | "activity" | "meetings">("details");
+  const [activeTab, setActiveTab] = useState<"details" | "notes" | "activity" | "meetings" | "links">("details");
   const [meetings, setMeetings] = useState<{ id: string; date: string; contactName: string | null; summary: string | null; nextSteps: string | null; outcome: string | null }[]>([]);
   const [meetingsLoaded, setMeetingsLoaded] = useState(false);
   const [showAddMeeting, setShowAddMeeting] = useState(false);
@@ -342,11 +343,18 @@ export function ContactDrawer({ contactId, onClose, onUpdated, onDeleted, onAtte
                 </div>
               )}
               <div style={{ display: "flex", gap: 0, borderTop: `1px solid ${C.brd}`, marginTop: 4 }}>
-                {(["details", "notes", "activity", "meetings"] as const).map(tab => (
-                  <button key={tab} onClick={() => setActiveTab(tab)} style={{ flex: 1, padding: "10px 2px", background: "none", border: "none", borderBottom: activeTab === tab ? `2px solid ${C.tx}` : "2px solid transparent", fontFamily: F, fontSize: 11, fontWeight: 700, color: activeTab === tab ? C.tx : C.mut, cursor: "pointer", textTransform: "capitalize", letterSpacing: 0.4 }}>
-                    {tab === "notes" ? `Notes (${notes.length})` : tab === "activity" ? `Activity (${calls.length + comms.length})` : tab === "meetings" ? `Meetings${meetingsLoaded ? ` (${meetings.length})` : ""}` : "Details"}
-                  </button>
-                ))}
+                {(["details", "notes", "activity", "meetings", "links"] as const).map(tab => {
+                  const linkCount = Array.isArray(contact?.links) ? contact!.links!.length : 0;
+                  return (
+                    <button key={tab} onClick={() => setActiveTab(tab)} style={{ flex: 1, padding: "10px 2px", background: "none", border: "none", borderBottom: activeTab === tab ? `2px solid ${C.tx}` : "2px solid transparent", fontFamily: F, fontSize: 11, fontWeight: 700, color: activeTab === tab ? C.tx : C.mut, cursor: "pointer", textTransform: "capitalize", letterSpacing: 0.4 }}>
+                      {tab === "notes" ? `Notes (${notes.length})`
+                        : tab === "activity" ? `Activity (${calls.length + comms.length})`
+                        : tab === "meetings" ? `Meetings${meetingsLoaded ? ` (${meetings.length})` : ""}`
+                        : tab === "links" ? `Links (${linkCount})`
+                        : "Details"}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
@@ -684,6 +692,26 @@ export function ContactDrawer({ contactId, onClose, onUpdated, onDeleted, onAtte
                     ))
                   )}
                 </>
+              )}
+
+              {activeTab === "links" && contact && (
+                <LinksEditor
+                  value={contact.links || []}
+                  onChange={async (next: TaskLink[]) => {
+                    // Optimistically update local contact + PATCH to BE. On
+                    // success the response replaces the contact so any BE
+                    // sanitization (e.g. https:// auto-prepend) shows up.
+                    setContact(prev => prev ? { ...prev, links: next } : prev);
+                    try {
+                      const updated = await patch<Contact>(`/contacts/${contact.id}`, { links: next });
+                      setContact(updated);
+                      onUpdated(updated);
+                    } catch (err) {
+                      showToast({ title: "Failed to save links", description: err instanceof Error ? err.message : "Try again", variant: "error" });
+                    }
+                  }}
+                  label="Links"
+                />
               )}
 
               {/* Add Meeting modal */}

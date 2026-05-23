@@ -251,6 +251,10 @@ export const planItemsTable = pgTable("plan_items", {
   highlightColor: text("highlight_color"),
   highlightNote: text("highlight_note"),
   highlightAt: timestamp("highlight_at", { withTimezone: true }),
+  // Links feature (Tony's 2026-05-16 PDF): array of {url, label?, createdAt}
+  // attached to the task — Loom recordings, Docs, Linear web links, etc.
+  // Stored as JSONB array; managed via the task detail modal's Links section.
+  links: jsonb("links").default([]),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
 }, (table) => [

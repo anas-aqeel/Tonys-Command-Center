@@ -163,6 +163,20 @@ router.patch("/contacts/:id", async (req, res): Promise<void> => {
   if ("expectedCloseDate" in body) updateFields.expectedCloseDate = body.expectedCloseDate ? String(body.expectedCloseDate) : null;
   if ("dealProbability" in body) updateFields.dealProbability = body.dealProbability != null ? Number(body.dealProbability) : null;
   if ("painPoints" in body) updateFields.painPoints = body.painPoints ? String(body.painPoints) : null;
+  if ("links" in body) {
+    // Links JSONB array of { url, label?, createdAt }. Best-effort validate:
+    // accept arrays only; each entry must have a url that starts with http(s).
+    const arr = Array.isArray(body.links) ? body.links : [];
+    const cleaned = arr
+      .filter((l: unknown): l is { url: string } =>
+        !!l && typeof l === "object" && typeof (l as { url?: unknown }).url === "string" && /^https?:\/\//i.test((l as { url: string }).url))
+      .map((l: { url: string; label?: unknown; createdAt?: unknown }) => ({
+        url: l.url,
+        ...(typeof l.label === "string" && l.label.trim() ? { label: l.label.trim() } : {}),
+        createdAt: typeof l.createdAt === "string" ? l.createdAt : new Date().toISOString(),
+      }));
+    updateFields.links = cleaned;
+  }
   updateFields.updatedAt = new Date();
 
   const [updated] = await db.update(contactsTable).set(updateFields).where(eq(contactsTable.id, id)).returning();

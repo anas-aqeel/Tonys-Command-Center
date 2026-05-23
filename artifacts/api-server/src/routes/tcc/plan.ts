@@ -606,7 +606,7 @@ router.post("/plan/task/:id/uncomplete", async (req, res): Promise<void> => {
 router.patch("/plan/item/:id", async (req, res): Promise<void> => {
   try {
     const { id } = req.params;
-    const allowed = ["title","owner","coOwner","priority","dueDate","status","workNotes","atomicKpi","source","executionTier","linearId","subcategory","highlightColor","highlightNote"];
+    const allowed = ["title","owner","coOwner","priority","dueDate","status","workNotes","atomicKpi","source","executionTier","linearId","subcategory","highlightColor","highlightNote","links"];
     const updates: Record<string, unknown> = { updatedAt: new Date() };
     for (const key of allowed) {
       if (req.body[key] !== undefined) updates[key] = req.body[key];

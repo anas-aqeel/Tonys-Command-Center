@@ -59,6 +59,8 @@ export interface Contact {
   dealProbability?: number | null;
   painPoints?: string;
   sheetId?: string;
+  /** Links feature (Tony's 2026-05-16): arbitrary URLs attached to the contact. */
+  links?: Array<{ url: string; label?: string; createdAt?: string }> | null;
   createdAt?: string;
   updatedAt?: string;
   _notes?: ContactNote[];

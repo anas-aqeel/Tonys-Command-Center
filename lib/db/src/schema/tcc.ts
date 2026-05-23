@@ -80,6 +80,10 @@ export const contactsTable = pgTable("contacts", {
   dealProbability: integer("deal_probability"),
   painPoints: text("pain_points"),
   sheetId: text("sheet_id"),
+  // Links feature (Tony's 2026-05-16 PDF) — arbitrary URLs attached to the
+  // contact (Loom recordings, LinkedIn, deck links, Google Drive folders).
+  // Managed via the Links tab in ContactDrawer.
+  links: jsonb("links").$type<Array<{ url: string; label?: string; createdAt: string }>>().default([]),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (t) => [

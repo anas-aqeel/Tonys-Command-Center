@@ -5,6 +5,7 @@ import { IdeasView } from "@/components/tcc/IdeasView";
 import { showTrainNowToast } from "@/lib/trainNowToast";
 import { LinearAttachPicker } from "@/components/tcc/LinearAttachPicker";
 import { HighlightPicker, highlightHex, HIGHLIGHT_COLORS } from "@/components/tcc/HighlightPicker";
+import { LinksEditor, type TaskLink } from "@/components/tcc/LinksEditor";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -35,6 +36,8 @@ type PlanItem = {
   highlightColor?: string | null;
   highlightNote?: string | null;
   highlightAt?: string | null;
+  // Links feature: arbitrary URLs attached to the task (Loom / Docs / etc.).
+  links?: Array<{ url: string; label?: string; createdAt?: string }> | null;
 };
 
 type SubcategoryWithTasks = PlanItem & { tasks: PlanItem[]; totalTasks: number; completedTasks: number };
@@ -1193,6 +1196,9 @@ function TaskDetailModal({ task, onClose, onSaved }: {
     highlightColor: task.highlightColor || "",
     highlightNote: task.highlightNote || "",
   });
+  // Links state — kept separate from form so the JSONB shape doesn't get
+  // string-coerced anywhere; sent as-is in the PATCH payload.
+  const [links, setLinks] = useState<TaskLink[]>(Array.isArray(task.links) ? task.links : []);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -1237,6 +1243,7 @@ function TaskDetailModal({ task, onClose, onSaved }: {
         ...form,
         highlightColor: form.highlightColor || null,
         highlightNote: form.highlightColor ? (form.highlightNote || null) : null,
+        links,
       };
       await patch(`/plan/item/${task.id}`, payload);
       setSaved(true);
@@ -1396,6 +1403,11 @@ function TaskDetailModal({ task, onClose, onSaved }: {
               highlightNote: next.note ?? "",
             }))}
           />
+
+          {/* Links feature (Tony's 2026-05-16 PDF — "New Column 'Links' after
+              status that can click and open - can also be managed/deleted/
+              added/changed in detail view"). */}
+          <LinksEditor value={links} onChange={setLinks} label="Links" />
 
           <div>
             <label style={lbl}>Atomic KPI</label>
