@@ -5,6 +5,10 @@ import type { TaskItem, CalItem, EmailItem, SlackItem, LinearItem } from "./type
 
 interface Contact { name: string; phone?: string; company?: string; nextStep?: string; status?: string; }
 interface LocalTask { id: string; text: string; dueDate?: string | null; taskType?: string | null; size?: string | null; }
+// Mirrors /plan/top3 response shape. Used by the print sheet's Top 3 panel
+// so it matches what the dashboard renders (instead of brief.tasks, which is
+// a different data source — Claude-generated daily focus items, often empty).
+interface PlanTask { id: string; title: string; category: string; subcategory?: string | null; owner?: string | null; priority?: string | null; sprintId?: string; status?: string | null; dueDate?: string | null; }
 
 // F4 (Tony's 2026-05-16): "Process Scanned Sheet" button is hidden until Tony
 // asks for it back. Backend route POST /sheet-scan/process is untouched —
@@ -207,10 +211,18 @@ export function PrintView({
   const [processResult, setProcessResult] = useState<string | null>(null);
   // F1 (Tony's 2026-05-16): include the actual to-do list on the printout.
   const [localTasks, setLocalTasks] = useState<LocalTask[]>([]);
+  // F1-fix: print Top 3 must read the same /plan/top3 source the dashboard uses
+  // (P0→P1→P2 sort from the 411 plan). Previously the print pulled from
+  // brief.tasks which is a separate Claude-generated brief surface and is
+  // usually empty, so the Top 3 panel printed blank rows.
+  const [planTop3, setPlanTop3] = useState<PlanTask[]>([]);
 
   useEffect(() => {
     get<LocalTask[]>("/tasks/local")
       .then(d => { if (Array.isArray(d)) setLocalTasks(d); })
+      .catch(() => {});
+    get<{ tasks: PlanTask[] }>("/plan/top3")
+      .then(d => { if (d?.tasks) setPlanTop3(d.tasks); })
       .catch(() => {});
   }, []);
 
@@ -277,7 +289,11 @@ export function PrintView({
   const ck = (id: string) => done.has(id);
 
   // Data
-  const top3 = tasks.filter(t => !tDone[t.id] && !t.sales).slice(0, 3);
+  // F1-fix: Top 3 now reads /plan/top3 (P0→P1→P2 from the 411 plan, matching
+  // the dashboard) instead of brief.tasks. Filter out tasks already completed
+  // locally; backend already excludes status='completed' but tDone covers the
+  // optimistic "checked but not yet saved" case.
+  const top3 = planTop3.filter(t => !tDone[t.id] && t.status !== "completed").slice(0, 3);
   const callList = topCallContacts.slice(0, 10);
   // F1 (Tony's 2026-05-16): include ALL calendar events on the print sheet —
   // the previous .filter(c => c.real) hid solo focus blocks, which was Tony's
@@ -416,7 +432,9 @@ export function PrintView({
 // ─────────────────────────────────────────────────────────────────────────────
 function FrontPage({ callList, top3, meetings, workBlocks, inboxEmail, ck, toggle, className }: {
   callList: Contact[];
-  top3: TaskItem[];
+  // F1-fix: was TaskItem[] (brief.tasks) — now PlanTask[] from /plan/top3 to
+  // match the dashboard's Top 3 source so the print sheet isn't empty.
+  top3: PlanTask[];
   meetings: CalItem[];
   workBlocks: { salesCalls?: string; tasks?: string; emails?: string };
   inboxEmail: string;
@@ -502,12 +520,21 @@ function FrontPage({ callList, top3, meetings, workBlocks, inboxEmail, ck, toggl
                     }}>{i + 1}</div>
                     <div style={{ flex: 1 }}>
                       {t ? (
-                        <div style={{
-                          fontSize: 11, fontWeight: i === 0 ? 700 : 600,
-                          color: isDone ? "#bbb" : BLK,
-                          textDecoration: isDone ? "line-through" : "none",
-                          lineHeight: 1.4,
-                        }}>{t.text}</div>
+                        <>
+                          <div style={{
+                            fontSize: 11, fontWeight: i === 0 ? 700 : 600,
+                            color: isDone ? "#bbb" : BLK,
+                            textDecoration: isDone ? "line-through" : "none",
+                            lineHeight: 1.4,
+                          }}>{t.title}</div>
+                          {/* Compact meta row: priority + sprintId + owner + due date */}
+                          <div style={{ display: "flex", gap: 5, alignItems: "center", marginTop: 2, fontSize: 8, color: "#666", flexWrap: "wrap" }}>
+                            {t.priority && <span style={{ fontWeight: 800, color: t.priority === "P0" ? "#B91C1C" : t.priority === "P1" ? "#B45309" : "#1D4ED8" }}>{t.priority}</span>}
+                            {t.sprintId && <span style={{ fontFamily: "monospace" }}>{t.sprintId}</span>}
+                            {t.owner && <span>· {t.owner}</span>}
+                            {t.dueDate && <span>· due {new Date(t.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>}
+                          </div>
+                        </>
                       ) : (
                         <div style={{ borderBottom: "1px solid #DDD", marginTop: 10 }} />
                       )}
