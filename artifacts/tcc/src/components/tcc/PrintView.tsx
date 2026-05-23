@@ -314,8 +314,13 @@ export function PrintView({
       return 0;
     })
     .slice(0, 8);
-  const ramiItems = linActive.filter(l => (l.who || "").toLowerCase().includes("rami") || (l.who || "").toLowerCase().includes("ramy") || (l.who || "").toLowerCase().includes("remy"));
-  const ethanItems = linActive.filter(l => (l.who || "").toLowerCase().includes("ethan"));
+  // Filter from the FULL linearItems list (not the top-30 slice) so a person
+  // whose tickets are lower-priority than the dominant assignee's still
+  // surface in their column. Previously the top-30 was Rami-heavy (CX-* high-pri
+  // tickets) which left zero Ethan rows in the filtered set even though Ethan
+  // has plenty of active Linear issues assigned.
+  const ramiItems = linearItems.filter(l => (l.who || "").toLowerCase().includes("rami") || (l.who || "").toLowerCase().includes("ramy") || (l.who || "").toLowerCase().includes("remy"));
+  const ethanItems = linearItems.filter(l => (l.who || "").toLowerCase().includes("ethan"));
   const workBlocks = computeWorkBlocks(meetings);
 
   return (
