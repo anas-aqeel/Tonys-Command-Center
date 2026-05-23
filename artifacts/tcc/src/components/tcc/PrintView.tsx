@@ -23,6 +23,9 @@ interface Props {
   slackItems?: SlackItem[];
   linearItems?: LinearItem[];
   topCallContacts?: Contact[];
+  /** True while parent loaders for calendar / emails / linear / contacts /
+      calls are still in flight on first open from a non-dashboard view. */
+  loading?: boolean;
   onClose: () => void;
   onRefresh?: () => Promise<void>;
 }
@@ -225,6 +228,7 @@ function Btn({ label, onClick, disabled, primary, dim }: {
 export function PrintView({
   tasks, tDone, calendarData, emailsImportant,
   slackItems = [], linearItems = [], topCallContacts = [],
+  loading = false,
   onClose, onRefresh,
 }: Props) {
   const [done, setDone] = useState<Set<string>>(new Set());
@@ -377,7 +381,8 @@ export function PrintView({
         {SHOW_PROCESS_SCANNED_SHEET && (
           <Btn label={processing ? "Processing…" : "📷 Process Scanned Sheet"} onClick={handleProcessScan} disabled={processing} dim />
         )}
-        <Btn label="🖨 Print" onClick={() => {
+        <Btn label={loading ? "Preparing…" : "🖨 Print"} disabled={loading} onClick={() => {
+          if (loading) return;
           const printEl = document.querySelector('.print-only') as HTMLElement;
           if (!printEl) return;
           const root = document.getElementById('root');
@@ -407,10 +412,37 @@ export function PrintView({
 
       {/* ── Scrollable preview area ── */}
       <div className="no-print" style={{
+        position: "relative",
         flex: 1, overflow: "auto",
         display: "flex", flexDirection: "column", alignItems: "center",
         padding: "32px 24px 48px", gap: 40,
       }}>
+        {/* Loading overlay — shown while parent sections finish loading
+            (typical first-open from a non-dashboard view). Lives inside the
+            scrollable container so it doesn't cover the toolbar. */}
+        {loading && (
+          <div style={{
+            position: "absolute", inset: 0, zIndex: 50,
+            background: "rgba(28,28,30,0.88)",
+            display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+            gap: 16,
+            backdropFilter: "blur(2px)",
+          }}>
+            <div style={{
+              width: 36, height: 36, borderRadius: "50%",
+              border: "3px solid rgba(255,255,255,0.18)",
+              borderTopColor: "#fff",
+              animation: "tcc-print-spin 0.8s linear infinite",
+            }} />
+            <div style={{ fontFamily: FS, fontSize: 16, fontWeight: 700, color: "#fff", letterSpacing: 0.3 }}>
+              Preparing your daily action sheet…
+            </div>
+            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.7)", fontFamily: F, textAlign: "center", maxWidth: 320, lineHeight: 1.5 }}>
+              Pulling today's calendar, emails, Linear tickets, and contacts. This usually takes a few seconds.
+            </div>
+            <style>{`@keyframes tcc-print-spin { to { transform: rotate(360deg); } }`}</style>
+          </div>
+        )}
         <label style={{ fontSize: 9, color: "#666", letterSpacing: 1.5, fontWeight: 700, textTransform: "uppercase", fontFamily: F, alignSelf: "flex-start", marginLeft: `calc(50% - ${PAGE_W / 2}px)` }}>PAGE 1 — FRONT</label>
         <FrontPage callList={callList} top3={top3} meetings={meetings} workBlocks={workBlocks} inboxEmail={inboxEmail} ck={ck} toggle={toggle} className="no-print-shadow" />
         <label style={{ fontSize: 9, color: "#666", letterSpacing: 1.5, fontWeight: 700, textTransform: "uppercase", fontFamily: F, alignSelf: "flex-start", marginLeft: `calc(50% - ${PAGE_W / 2}px)` }}>PAGE 2 — BACK</label>

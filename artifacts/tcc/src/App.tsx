@@ -843,6 +843,10 @@ export default function App() {
           slackItems={brief?.slackItems || []}
           linearItems={activeLinearItems}
           topCallContacts={contacts.map(c => ({ name: c.name, phone: c.phone, company: c.company, nextStep: c.nextStep }))}
+          // Show "Preparing…" overlay until every section the print sheet
+          // depends on has finished its initial load. Avoids flashing empty
+          // rows when Print is clicked from a non-dashboard view.
+          loading={!sectionsLoaded.calendar || !sectionsLoaded.emails || !sectionsLoaded.linear || !contactsLoaded || !callsLoaded}
           onClose={() => setPrintMode(false)}
           onRefresh={() => refreshBrief(["calendar", "emails"])}
         />
