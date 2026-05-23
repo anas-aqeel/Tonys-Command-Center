@@ -29,6 +29,29 @@ interface Props {
 
 const DATE_STR = new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric", timeZone: "America/Los_Angeles" });
 
+// Strip HTML tags + decode common entities from a string (used to clean GCal
+// event descriptions before rendering in the narrow PREP column on the print
+// sheet — without this, raw <a href="..."> and <br> markup leaks through).
+function stripHtml(s: string | null | undefined, maxLen = 90): string {
+  if (!s) return "";
+  // Replace <br> / </p> / </div> with a single space so words don't merge
+  let out = s.replace(/<br\s*\/?>|<\/p>|<\/div>/gi, " ");
+  // Drop all other tags
+  out = out.replace(/<[^>]+>/g, "");
+  // Decode common HTML entities
+  out = out
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'");
+  // Collapse whitespace + trim, then truncate
+  out = out.replace(/\s+/g, " ").trim();
+  if (out.length > maxLen) out = out.slice(0, maxLen).trimEnd() + "…";
+  return out;
+}
+
 function parseTimeMins(t: string): number | null {
   const m = t?.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
   if (!m) return null;
@@ -595,12 +618,26 @@ function FrontPage({ callList, top3, meetings, workBlocks, inboxEmail, ck, toggl
                 {meetings.map((m, i) => {
                   const id = `meet-${i}`;
                   const isDone = ck(id);
+                  // GCal descriptions often carry HTML; clean before rendering
+                  // so <a href="..."> doesn't leak as visible text. Prefer loc
+                  // over note since location is usually short + already plain.
+                  const prep = stripHtml(m.loc || m.note, 70);
                   return (
                     <tr key={id} style={{ background: i % 2 === 0 ? "#fff" : "#FAFAFA" }}>
                       <TD center><CB id={id} done={isDone} onToggle={toggle} /></TD>
                       <TD small bold noWrap>{m.t}{m.tEnd ? `–${m.tEnd}` : ""}</TD>
-                      <TD strike={isDone} small>{m.n}</TD>
-                      <TD small dim>{m.loc || m.note || ""}</TD>
+                      <td style={{
+                        fontSize: 9, fontWeight: 400, color: isDone ? "#999" : BLK,
+                        padding: "5px 6px", verticalAlign: "top",
+                        textDecoration: isDone ? "line-through" : "none",
+                        borderBottom: "1px solid #E8E8E8",
+                        overflowWrap: "anywhere", wordBreak: "break-word",
+                      }}>{stripHtml(m.n, 80)}</td>
+                      <td style={{
+                        fontSize: 9, color: "#999", padding: "5px 6px",
+                        verticalAlign: "top", borderBottom: "1px solid #E8E8E8",
+                        overflowWrap: "anywhere", wordBreak: "break-word",
+                      }} title={m.note || m.loc || ""}>{prep}</td>
                     </tr>
                   );
                 })}
