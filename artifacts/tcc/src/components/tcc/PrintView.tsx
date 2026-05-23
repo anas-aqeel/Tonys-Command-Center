@@ -453,6 +453,12 @@ export function PrintView({
           }
           /* Never break a table row or a section heading across pages. */
           #print-wrapper table, #print-wrapper tr { page-break-inside: avoid; break-inside: avoid; }
+          /* Force Priority Emails (+ Slack below it) onto a fresh sheet so
+             the heading doesn't orphan at the bottom of page 2. */
+          #print-wrapper .print-page-break-before {
+            page-break-before: always;
+            break-before: page;
+          }
         }
         @page { size: letter portrait; margin: 0.4in 0.45in; }
       `}</style>
@@ -812,7 +818,11 @@ function BackPage({ linActive, ramiItems, ethanItems, emails, slackActive, workB
           </div>
         </div>
 
-        {/* ══ EMAILS — FULL WIDTH ══ */}
+        {/* ══ EMAILS + SLACK — pushed to a new sheet on print so the Priority
+            Emails heading doesn't orphan at the bottom of page 2 (Tony's
+            2026-05-23 feedback). On-screen preview shows it inline; only the
+            @media print rule below activates the break. */}
+        <div className="print-page-break-before">
         <SL text="📧 Priority Emails" color="#E65100" time={workBlocks.emails} />
         <table style={{ width: "100%", borderCollapse: "collapse", border: BORDER, marginBottom: 10 }}>
           <thead>
@@ -897,6 +907,7 @@ function BackPage({ linActive, ramiItems, ethanItems, emails, slackActive, workB
             ))}
           </tbody>
         </table>
+        </div>{/* /print-page-break-before */}
 
       </div>
     </Page>
