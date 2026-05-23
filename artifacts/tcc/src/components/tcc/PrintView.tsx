@@ -235,9 +235,14 @@ export function PrintView({
   }, []);
 
   useEffect(() => {
-    get<{ ok: boolean; email?: string }>("/sheet-scan/inbox")
-      .then(r => { if (r.ok && r.email) setInboxEmail(r.email); })
-      .catch(() => {});
+    // Only fetch when the scan UI is enabled — the endpoint currently 500s
+    // because AgentMail was removed, so skipping when hidden avoids noisy
+    // logs and saves the round-trip.
+    if (SHOW_PROCESS_SCANNED_SHEET) {
+      get<{ ok: boolean; email?: string }>("/sheet-scan/inbox")
+        .then(r => { if (r.ok && r.email) setInboxEmail(r.email); })
+        .catch(() => {});
+    }
   }, []);
 
   const handleProcessScan = async () => {
@@ -549,19 +554,26 @@ function FrontPage({ callList, top3, meetings, workBlocks, inboxEmail, ck, toggl
               })}
             </div>
 
-            {/* Scan footer inside left col */}
-            <div style={{
-              marginTop: 12, padding: "7px 12px",
-              border: "1.5px dashed #BBB", borderRadius: 4, background: "#FAFAFA",
-            }}>
-              <div style={{ fontSize: 8, fontWeight: 900, textTransform: "uppercase", letterSpacing: 1, color: "#888", marginBottom: 3 }}>
-                📷 Fill &amp; scan — email photo to TCC
+            {/* Scan footer — gated by the same flag as the "Process Scanned
+                Sheet" toolbar button (F4). Hidden by default because the
+                underlying AgentMail integration was removed; flip
+                SHOW_PROCESS_SCANNED_SHEET to true to re-enable both. The
+                /sheet-scan/inbox endpoint currently throws which is why this
+                row was stuck on "loading inbox…" forever. */}
+            {SHOW_PROCESS_SCANNED_SHEET && (
+              <div style={{
+                marginTop: 12, padding: "7px 12px",
+                border: "1.5px dashed #BBB", borderRadius: 4, background: "#FAFAFA",
+              }}>
+                <div style={{ fontSize: 8, fontWeight: 900, textTransform: "uppercase", letterSpacing: 1, color: "#888", marginBottom: 3 }}>
+                  📷 Fill &amp; scan — email photo to TCC
+                </div>
+                <div style={{ fontSize: 9, fontWeight: 700, color: "#444", fontFamily: "monospace" }}>
+                  {inboxEmail || "loading inbox…"}
+                </div>
+                <div style={{ fontSize: 8, color: "#888", marginTop: 2 }}>TCC reads it automatically &amp; updates your system</div>
               </div>
-              <div style={{ fontSize: 9, fontWeight: 700, color: "#444", fontFamily: "monospace" }}>
-                {inboxEmail || "loading inbox…"}
-              </div>
-              <div style={{ fontSize: 8, color: "#888", marginTop: 2 }}>TCC reads it automatically &amp; updates your system</div>
-            </div>
+            )}
           </div>
 
           {/* RIGHT — Calendar */}
