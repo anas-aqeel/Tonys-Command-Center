@@ -2278,7 +2278,12 @@ function MasterTaskTab({ onRefreshAll, categories, initialParentFilter, onInitia
               const done = task.status === "completed";
               const isLate = !done && task.dueDate && new Date(task.dueDate) < new Date("2026-04-09");
               const isDraggingOver = dragOverId === task.id;
-              const rowBg = isDraggingOver ? "#EFF6FF" : done ? "#F9FFF9" : isLate ? "#FFF8F8" : "#fff";
+              // Highlight feature: tint whole row with the highlight color at ~13%
+              // opacity. Drag-over / done / late states still win to preserve
+              // user-facing affordances.
+              const hlHex = highlightHex(task.highlightColor);
+              const baseBg = isDraggingOver ? "#EFF6FF" : done ? "#F9FFF9" : isLate ? "#FFF8F8" : "#fff";
+              const rowBg = hlHex && !isDraggingOver && !done && !isLate ? `${hlHex}22` : baseBg;
               const pc = personColor(task.owner || "");
 
               const isJustCreated = task.id === justCreatedId;
@@ -2373,15 +2378,13 @@ function MasterTaskTab({ onRefreshAll, categories, initialParentFilter, onInitia
                       overflowWrap: anywhere lets long URLs (no whitespace)
                       break mid-string so the cell respects maxWidth instead of
                       bleeding into adjacent columns.
-                      Highlight feature (Tony's 2026-05-16): if task is
-                      highlighted, render a colored left-edge bar + a small
-                      circle dot next to the title. Hover the dot to see the
-                      highlight note (native title tooltip). */}
+                      Highlight feature (Tony's 2026-05-16): the row background
+                      is tinted with the highlight color (see rowBg above), and
+                      the title gets a small colored circle for quick scanning.
+                      The full highlight note appears in the row's hover card. */}
                   <td style={{
                     padding: "8px 10px", maxWidth: 220, minWidth: 140,
                     overflowWrap: "anywhere", wordBreak: "break-word",
-                    borderLeft: highlightHex(task.highlightColor) ? `4px solid ${highlightHex(task.highlightColor)}` : undefined,
-                    paddingLeft: highlightHex(task.highlightColor) ? 6 : 10,
                   }}>
                     <span style={{
                       fontSize: task.taskType === "note" ? 11 : 12,
@@ -2396,13 +2399,11 @@ function MasterTaskTab({ onRefreshAll, categories, initialParentFilter, onInitia
                       {(task.taskType === "subtask" || task.taskType === "note") && <span style={{ color: C.mut, marginRight: 4 }}>↳</span>}
                       {highlightHex(task.highlightColor) && (
                         <span
-                          title={task.highlightNote || `Highlighted (${task.highlightColor})`}
                           style={{
                             display: "inline-block",
                             width: 9, height: 9, borderRadius: "50%",
                             background: highlightHex(task.highlightColor) || undefined,
                             marginRight: 6, verticalAlign: "middle",
-                            cursor: "help",
                             border: "1px solid rgba(0,0,0,0.15)",
                           }}
                         />
@@ -2564,6 +2565,29 @@ function MasterTaskTab({ onRefreshAll, categories, initialParentFilter, onInitia
               </div>
               {t.dueDate && <div style={{ fontSize: 11, color: C.mut }}>Due: <strong>{t.dueDate}</strong></div>}
               {t.completedAt && <div style={{ fontSize: 11, color: C.grn, fontWeight: 600 }}>✓ Completed {new Date(t.completedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</div>}
+              {/* Highlight section — shown first when present so Tony sees
+                  the focus marker before everything else (the row is also
+                  tinted in the master list to reinforce). */}
+              {t.highlightColor && (() => {
+                const hex = highlightHex(t.highlightColor) || "#888";
+                return (
+                  <div style={{
+                    marginTop: -2,
+                    padding: "6px 9px",
+                    background: `${hex}18`,
+                    borderLeft: `3px solid ${hex}`,
+                    borderRadius: 4,
+                  }}>
+                    <div style={{ fontSize: 9, fontWeight: 800, color: hex, textTransform: "uppercase", letterSpacing: 0.5, display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: hex }} />
+                      Highlighted ({t.highlightColor})
+                    </div>
+                    {t.highlightNote && (
+                      <div style={{ fontSize: 12, color: C.tx, marginTop: 3, lineHeight: 1.45 }}>{t.highlightNote}</div>
+                    )}
+                  </div>
+                );
+              })()}
               {t.atomicKpi && (
                 <div>
                   <div style={{ fontSize: 9, fontWeight: 700, color: C.sub, textTransform: "uppercase", letterSpacing: 0.5 }}>Atomic KPI</div>
@@ -2576,7 +2600,7 @@ function MasterTaskTab({ onRefreshAll, categories, initialParentFilter, onInitia
                   <div style={{ fontSize: 12, color: C.tx, marginTop: 2, lineHeight: 1.5 }}>{t.workNotes}</div>
                 </div>
               )}
-              {!t.atomicKpi && !t.workNotes && <div style={{ fontSize: 11, color: C.mut, fontStyle: "italic" }}>Click to add notes →</div>}
+              {!t.atomicKpi && !t.workNotes && !t.highlightColor && <div style={{ fontSize: 11, color: C.mut, fontStyle: "italic" }}>Click to add notes →</div>}
             </div>
           </div>
         );
