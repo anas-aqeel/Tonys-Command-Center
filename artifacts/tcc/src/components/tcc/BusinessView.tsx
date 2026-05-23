@@ -2332,8 +2332,11 @@ function MasterTaskTab({ onRefreshAll, categories, initialParentFilter, onInitia
                   </td>
                   {/* Subcategory */}
                   <td style={{ padding: "8px 10px", fontSize: 11, color: C.sub }}>{task.subcategory || "—"}</td>
-                  {/* Task title — with tree indent for subs/notes */}
-                  <td style={{ padding: "8px 10px", maxWidth: 220, minWidth: 140 }}>
+                  {/* Task title — with tree indent for subs/notes.
+                      overflowWrap: anywhere lets long URLs (no whitespace)
+                      break mid-string so the cell respects maxWidth instead of
+                      bleeding into adjacent columns. */}
+                  <td style={{ padding: "8px 10px", maxWidth: 220, minWidth: 140, overflowWrap: "anywhere", wordBreak: "break-word" }}>
                     <span style={{
                       fontSize: task.taskType === "note" ? 11 : 12,
                       color: done ? C.mut : task.taskType === "note" ? C.sub : C.tx,
@@ -2348,8 +2351,8 @@ function MasterTaskTab({ onRefreshAll, categories, initialParentFilter, onInitia
                       {task.title}
                     </span>
                   </td>
-                  {/* Atomic KPI */}
-                  <td style={{ padding: "8px 10px", maxWidth: 160, fontSize: 11, color: C.sub }}>{task.atomicKpi || "—"}</td>
+                  {/* Atomic KPI — same wrap treatment so long KPI text doesn't bleed. */}
+                  <td style={{ padding: "8px 10px", maxWidth: 160, fontSize: 11, color: C.sub, overflowWrap: "anywhere", wordBreak: "break-word" }}>{task.atomicKpi || "—"}</td>
                   {/* Owner */}
                   <td style={{ padding: "8px 10px" }}>
                     {task.owner && <span style={{ fontSize: 11, fontWeight: 700, color: pc, background: pc + "18", borderRadius: 8, padding: "1px 7px", whiteSpace: "nowrap" }}>{task.owner}</span>}
