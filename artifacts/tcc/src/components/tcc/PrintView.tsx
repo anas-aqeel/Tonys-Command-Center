@@ -325,14 +325,16 @@ export function PrintView({
   const callList = topCallContacts.slice(0, 10);
   // F1 (Tony's 2026-05-16): include ALL calendar events on the print sheet —
   // the previous .filter(c => c.real) hid solo focus blocks, which was Tony's
-  // "Missing... Today's calendar". Cap to 9 rows so it still fits the layout.
+  // "Missing... Today's calendar". Caps below sized to keep the typical day
+  // within the 2-sheet target without the hard CSS clip that was truncating
+  // content (see @media print block above).
   const meetings = calendarData.slice(0, 9);
-  const emails = emailsImportant.slice(0, 8);
-  const linActive = linearItems.slice(0, 30);
-  const slackActive = slackItems.slice(0, 8);
-  // F1: filter to ACTIVE local tasks not already done; cap to 8 for the
-  // back-page section so F2's 2-page constraint holds even with full Linear
-  // + email + slack rows. Sort by due date ascending (no date = end).
+  const emails = emailsImportant.slice(0, 7);
+  const linActive = linearItems.slice(0, 22);
+  const slackActive = slackItems.slice(0, 6);
+  // F1: filter to ACTIVE local tasks not already done; cap to 6 for the
+  // back-page section so the 2-page target holds without the CSS hard-clip.
+  // Sort by due date ascending (no date = end).
   const todoList = localTasks
     .slice()
     .sort((a, b) => {
@@ -341,7 +343,7 @@ export function PrintView({
       if (b.dueDate) return 1;
       return 0;
     })
-    .slice(0, 8);
+    .slice(0, 6);
   // Filter from the FULL linearItems list (not the top-30 slice) so a person
   // whose tickets are lower-priority than the dominant assignee's still
   // surface in their column. Previously the top-30 was Rami-heavy (CX-* high-pri
@@ -437,20 +439,19 @@ export function PrintView({
             margin: 0;
             box-shadow: none !important;
             border-radius: 0 !important;
-            /* F2 (Tony's 2026-05-16): hard-cap each page to exactly one sheet.
-               Letter portrait minus 0.4in×2 margins = 10.2in usable; we clip
-               at 10.0in for a small safety buffer so overflow content never
-               spills onto a 3rd page. */
-            max-height: 10in;
-            overflow: hidden !important;
-            page-break-inside: avoid;
-            break-inside: avoid-page;
+            /* F2 (Tony's 2026-05-16) target: print on exactly 2 sheets. The
+               earlier hard-cap (max-height + overflow:hidden) was clipping
+               content that didn't fit, which Tony saw as page 2 being cut
+               off. Now we let the browser flow naturally and use row-level
+               break rules to avoid awkward mid-row splits. If the content
+               occasionally needs a sliver of a 3rd page that's acceptable —
+               clipping was worse. */
           }
           #print-wrapper .print-page + .print-page {
             page-break-before: always;
             break-before: page;
           }
-          /* F2: never break a table row or a section heading across pages. */
+          /* Never break a table row or a section heading across pages. */
           #print-wrapper table, #print-wrapper tr { page-break-inside: avoid; break-inside: avoid; }
         }
         @page { size: letter portrait; margin: 0.4in 0.45in; }
