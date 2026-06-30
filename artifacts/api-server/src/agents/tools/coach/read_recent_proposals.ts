@@ -6,7 +6,7 @@
 // same idea on the next training run.
 
 import type { ToolHandler } from "../index.js";
-import { db, agentMemoryProposalsTable } from "@workspace/db";
+import { personalDb, agentMemoryProposalsTable } from "@workspace/db";
 import { and, eq, desc } from "drizzle-orm";
 
 interface Input {
@@ -23,7 +23,7 @@ const handler: ToolHandler = async (input) => {
   const filters = [eq(agentMemoryProposalsTable.agent, agent)];
   if (status !== "all") filters.push(eq(agentMemoryProposalsTable.status, status));
 
-  const rows = await db.select({
+  const rows = await personalDb.select({
     id: agentMemoryProposalsTable.id,
     status: agentMemoryProposalsTable.status,
     summary: agentMemoryProposalsTable.summary,

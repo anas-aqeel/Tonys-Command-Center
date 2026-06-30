@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { eq, desc, and, or, gt, isNull } from "drizzle-orm";
-import { db, emailTrainingTable, emailSnoozesTable, systemInstructionsTable } from "@workspace/db";
+import { personalDb, emailTrainingTable, emailSnoozesTable, systemInstructionsTable } from "@workspace/db";
 import { EmailActionBody } from "@workspace/api-zod";
 import { anthropic, createTrackedMessage } from "@workspace/integrations-anthropic-ai";
 import { sendEmail } from "../../lib/gmail.js";
@@ -46,12 +46,12 @@ function snoozeLabelToExpiry(label: string): Date | null {
 
 // ─── GET brain ────────────────────────────────────────────────────────────────
 router.get("/emails/brain", async (req, res): Promise<void> => {
-  const [row] = await db
+  const [row] = await personalDb
     .select()
     .from(systemInstructionsTable)
     .where(eq(systemInstructionsTable.section, "email_brain"));
 
-  const training = await db
+  const training = await personalDb
     .select()
     .from(emailTrainingTable)
     .orderBy(desc(emailTrainingTable.createdAt))
@@ -72,7 +72,7 @@ router.get("/emails/brain", async (req, res): Promise<void> => {
 router.get("/emails/snoozed", async (req, res): Promise<void> => {
   const today = todayPacific();
   const now = new Date();
-  const snoozes = await db
+  const snoozes = await personalDb
     .select()
     .from(emailSnoozesTable)
     .where(or(
@@ -98,7 +98,7 @@ router.post("/emails/action", async (req, res): Promise<void> => {
   const { action, emailId, sender, subject, reason, snoozeUntil } = parsed.data;
 
   if (action === "thumbs_up" || action === "thumbs_down") {
-    await db.insert(emailTrainingTable).values({
+    await personalDb.insert(emailTrainingTable).values({
       sender: sender || "unknown",
       subject: subject || "",
       action,
@@ -127,7 +127,7 @@ router.post("/emails/action", async (req, res): Promise<void> => {
     // Brain regeneration moved to Coach Train button (Phase 6 onwards):
     // every thumbs feedback writes to agent_feedback (above), and Tony reviews
     // patterns + clicks Train to fire Coach. Auto-fire-on-threshold removed.
-    const countResult = await db.select().from(emailTrainingTable);
+    const countResult = await personalDb.select().from(emailTrainingTable);
     const totalSamples = countResult.length;
     res.json({ ok: true, feedback_id: feedbackId, message: `Training saved (${totalSamples} samples — review via Train button on Email agent settings)` });
     return;
@@ -138,7 +138,7 @@ router.post("/emails/action", async (req, res): Promise<void> => {
       const today = todayPacific();
       const label = snoozeUntil || "tomorrow";
       const expiresAt = snoozeLabelToExpiry(label);
-      await db
+      await personalDb
         .insert(emailSnoozesTable)
         .values({ date: today, emailId, snoozeUntil: label, expiresAt })
         .onConflictDoUpdate({
@@ -206,7 +206,7 @@ router.post("/emails/action", async (req, res): Promise<void> => {
 
   if (action === "suggest_reply") {
     // Load the email brain to inform the reply
-    const [brainRow] = await db
+    const [brainRow] = await personalDb
       .select()
       .from(systemInstructionsTable)
       .where(eq(systemInstructionsTable.section, "email_brain"));

@@ -1,6 +1,6 @@
 // Calls feedback snapshot — for follow-up draft thumbs / edit feedback.
 
-import { db, callLogTable, contactsTable, contactIntelligenceTable } from "@workspace/db";
+import { sharedDb, callLogTable, contactsTable, contactIntelligenceTable } from "@workspace/db";
 import { eq, desc } from "drizzle-orm";
 
 export async function captureCallsSnapshot(
@@ -14,23 +14,23 @@ export async function captureCallsSnapshot(
   let recentCallsToContact: any[] = [];
 
   if (sourceId && /^[0-9a-f-]{36}$/i.test(sourceId)) {
-    const [c] = await db.select().from(callLogTable)
+    const [c] = await sharedDb.select().from(callLogTable)
       .where(eq(callLogTable.id, sourceId))
       .limit(1);
     call = c || null;
 
     if (call?.contactName) {
-      const [con] = await db.select().from(contactsTable)
+      const [con] = await sharedDb.select().from(contactsTable)
         .where(eq(contactsTable.name, call.contactName))
         .limit(1);
       contact = con || null;
       if (contact?.id) {
-        const [i] = await db.select().from(contactIntelligenceTable)
+        const [i] = await sharedDb.select().from(contactIntelligenceTable)
           .where(eq(contactIntelligenceTable.contactId, contact.id))
           .limit(1);
         intelligence = i || null;
 
-        recentCallsToContact = await db.select({
+        recentCallsToContact = await sharedDb.select({
           type: callLogTable.type,
           notes: callLogTable.notes,
           createdAt: callLogTable.createdAt,

@@ -9,7 +9,7 @@
 //   4. trainingRunId must be present on context (set by analyzeFeedback caller).
 
 import type { ToolHandler } from "../index.js";
-import { db, agentMemoryProposalsTable, agentTrainingRunsTable } from "@workspace/db";
+import { personalDb, agentMemoryProposalsTable, agentTrainingRunsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 
 interface DiffInput {
@@ -61,7 +61,7 @@ const handler: ToolHandler = async (input, ctx) => {
   }
 
   // Enforce at-most-one-proposal-per-run.
-  const [existing] = await db.select({ id: agentMemoryProposalsTable.id })
+  const [existing] = await personalDb.select({ id: agentMemoryProposalsTable.id })
     .from(agentMemoryProposalsTable)
     .where(eq(agentMemoryProposalsTable.trainingRunId, ctx.trainingRunId))
     .limit(1);
@@ -70,7 +70,7 @@ const handler: ToolHandler = async (input, ctx) => {
   }
 
   // Insert
-  const [row] = await db.insert(agentMemoryProposalsTable).values({
+  const [row] = await personalDb.insert(agentMemoryProposalsTable).values({
     agent,
     trainingRunId: ctx.trainingRunId,
     reason,
@@ -85,7 +85,7 @@ const handler: ToolHandler = async (input, ctx) => {
   }).returning({ id: agentMemoryProposalsTable.id });
 
   // Stamp the run with the proposal id (lets Train UI flip from running → pending review).
-  await db.update(agentTrainingRunsTable).set({
+  await personalDb.update(agentTrainingRunsTable).set({
     proposalId: row.id,
   }).where(eq(agentTrainingRunsTable.id, ctx.trainingRunId));
 

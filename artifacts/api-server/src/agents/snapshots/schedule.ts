@@ -1,7 +1,7 @@
 // Schedule feedback snapshot — for force-override on scope-block.
 // Caller passes meeting metadata + scope-gatekeeper decision via `extra`.
 
-import { db, manualScheduleEventsTable } from "@workspace/db";
+import { personalDb, manualScheduleEventsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 
 export async function captureScheduleSnapshot(
@@ -14,7 +14,7 @@ export async function captureScheduleSnapshot(
   let event: any = null;
   try {
     if (sourceId && /^[0-9a-f-]{36}$/i.test(sourceId)) {
-      const [e] = await db.select().from(manualScheduleEventsTable)
+      const [e] = await personalDb.select().from(manualScheduleEventsTable)
         .where(eq(manualScheduleEventsTable.id, sourceId))
         .limit(1);
       event = e || null;

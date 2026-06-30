@@ -8,7 +8,7 @@
 //   2. agent_tools row — DB registry: tool_name → handler module path.
 //   3. resolveTool() — dynamic-import resolver used by runtime.ts multi-turn loop.
 
-import { db, agentToolsTable } from "@workspace/db";
+import { personalDb, agentToolsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { HANDLER_REGISTRY } from "./registry.js";
 
@@ -93,7 +93,7 @@ export async function resolveTool(toolName: string): Promise<{ handler: ToolHand
     return spec ? { handler: cached, spec } : null;
   }
 
-  const [row] = await db.select().from(agentToolsTable)
+  const [row] = await personalDb.select().from(agentToolsTable)
     .where(eq(agentToolsTable.toolName, toolName))
     .limit(1);
   if (!row) return null;
@@ -144,7 +144,7 @@ export async function resolveTool(toolName: string): Promise<{ handler: ToolHand
 }
 
 async function loadSpec(toolName: string): Promise<AnthropicToolSpec | null> {
-  const [row] = await db.select().from(agentToolsTable)
+  const [row] = await personalDb.select().from(agentToolsTable)
     .where(eq(agentToolsTable.toolName, toolName))
     .limit(1);
   if (!row) return null;

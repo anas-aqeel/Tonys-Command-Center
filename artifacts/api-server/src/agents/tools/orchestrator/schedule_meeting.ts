@@ -14,14 +14,14 @@ const handler: ToolHandler = async (input) => {
   const isSalesRelated = purpose === "sales" || purpose === "ramy_support"
     || contactName.toLowerCase().includes("ramy");
   if (!isSalesRelated) {
-    return `⚠️ SCOPE GATEKEEPER: This meeting doesn't appear to be sales-related or Ramy support. Tony's priority: (1) Sales calls, (2) Ramy support, (3) everything else pushed to off-hours. Confirm this is a sales conversation or Ramy coordination.`;
+    return `⚠️ SCOPE GATEKEEPER: This meeting doesn't appear to be sales-related or Ramy support. ${(process.env.TCC_USER_NAME || "Tony").split(/\s+/)[0]}'s priority: (1) Sales calls, (2) Ramy support, (3) everything else pushed to off-hours. Confirm this is a sales conversation or Ramy coordination.`;
   }
 
   const startDate = new Date(preferredDate);
   const pacificStart = new Date(startDate.toLocaleString("en-US", { timeZone: "America/Los_Angeles" }));
   const startHour = pacificStart.getHours();
   if (startHour < 12 && contactEmail) {
-    return `⛔ Morning Protection: Tony's morning (before noon PT) is reserved for outbound calls only. No external meetings before noon. Please schedule this for 12 PM or later.`;
+    return `⛔ Morning Protection: ${(process.env.TCC_USER_NAME || "Tony").split(/\s+/)[0]}'s morning (before noon PT) is reserved for outbound calls only. No external meetings before noon. Please schedule this for 12 PM or later.`;
   }
 
   const endDate = new Date(startDate.getTime() + duration * 60 * 1000);

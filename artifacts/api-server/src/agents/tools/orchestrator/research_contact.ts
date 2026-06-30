@@ -3,7 +3,7 @@
 // claude.ts (audit's CRITICAL NOTES item #3).
 
 import type { ToolHandler } from "../index.js";
-import { db, contactsTable } from "@workspace/db";
+import { sharedDb, contactsTable } from "@workspace/db";
 import { contactIntelligenceTable } from "../../../lib/schema-v2.js";
 import { eq, ilike, desc, sql } from "drizzle-orm";
 
@@ -12,22 +12,22 @@ const handler: ToolHandler = async (input) => {
     const { communicationLogTable: commLog } = await import("../../../lib/schema-v2.js");
     let contact;
     if (input.contactId) {
-      [contact] = await db.select().from(contactsTable).where(eq(contactsTable.id, String(input.contactId))).limit(1);
+      [contact] = await sharedDb.select().from(contactsTable).where(eq(contactsTable.id, String(input.contactId))).limit(1);
     } else if (input.contactName) {
-      [contact] = await db.select().from(contactsTable)
+      [contact] = await sharedDb.select().from(contactsTable)
         .where(ilike(contactsTable.name, `%${String(input.contactName)}%`)).limit(1);
     }
     if (!contact) return `No contact found for "${input.contactName || input.contactId}".`;
 
-    const [intel] = await db.select().from(contactIntelligenceTable)
+    const [intel] = await sharedDb.select().from(contactIntelligenceTable)
       .where(eq(contactIntelligenceTable.contactId, contact.id)).limit(1);
 
-    const recentComms = await db.select().from(commLog)
+    const recentComms = await sharedDb.select().from(commLog)
       .where(eq(commLog.contactId, contact.id))
       .orderBy(desc(commLog.loggedAt))
       .limit(5);
 
-    const totalComms = await db.select({ count: sql<number>`count(*)` }).from(commLog)
+    const totalComms = await sharedDb.select({ count: sql<number>`count(*)` }).from(commLog)
       .where(eq(commLog.contactId, contact.id));
     const total = Number(totalComms[0]?.count ?? 0);
 

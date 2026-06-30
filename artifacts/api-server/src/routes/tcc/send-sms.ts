@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, phoneLogTable, contactsTable } from "@workspace/db";
+import { sharedDb, phoneLogTable, contactsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { z } from "zod/v4";
 import { communicationLogTable } from "../../lib/schema-v2";
@@ -61,12 +61,12 @@ router.post("/send-sms", async (req, res): Promise<void> => {
   // Resolve contact name if contact_id given
   let contactName: string | undefined;
   if (contact_id) {
-    const [c] = await db.select({ name: contactsTable.name }).from(contactsTable).where(eq(contactsTable.id, contact_id));
+    const [c] = await sharedDb.select({ name: contactsTable.name }).from(contactsTable).where(eq(contactsTable.id, contact_id));
     contactName = c?.name;
   }
 
   // Log the outbound SMS
-  const [entry] = await db
+  const [entry] = await sharedDb
     .insert(phoneLogTable)
     .values({
       phoneNumber: phone_number,
@@ -79,7 +79,7 @@ router.post("/send-sms", async (req, res): Promise<void> => {
     })
     .returning();
 
-  await db.insert(communicationLogTable).values({
+  await sharedDb.insert(communicationLogTable).values({
     contactId: contact_id ?? undefined,
     contactName: contactName ?? phone_number,
     channel: "text_sent",

@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { eq, asc } from "drizzle-orm";
-import { db } from "@workspace/db";
+import { sharedDb } from "@workspace/db";
 import { linearPrioritiesTable } from "../../lib/schema-v2";
 import { z } from "zod/v4";
 
@@ -9,7 +9,7 @@ const router: IRouter = Router();
 const ALLOWED_ACTIONS = ["DO NOW", "KEEP", "PROMOTE", "PAUSE", "DEFER", "KILL"] as const;
 
 router.get("/linear-priorities", async (_req, res): Promise<void> => {
-  const rows = await db
+  const rows = await sharedDb
     .select()
     .from(linearPrioritiesTable)
     .orderBy(asc(linearPrioritiesTable.priorityOrder));
@@ -35,14 +35,14 @@ router.post("/linear-priorities", async (req, res): Promise<void> => {
     res.status(400).json({ error: parsed.error.message });
     return;
   }
-  const existing = await db
+  const existing = await sharedDb
     .select({ p: linearPrioritiesTable.priorityOrder })
     .from(linearPrioritiesTable)
     .orderBy(asc(linearPrioritiesTable.priorityOrder));
   const nextOrder = existing.length ? existing[existing.length - 1].p + 1 : 0;
   const isProject = parsed.data.linearRef.startsWith("Project:");
   const action = parsed.data.action.trim().toUpperCase();
-  const [row] = await db
+  const [row] = await sharedDb
     .insert(linearPrioritiesTable)
     .values({ ...parsed.data, action, isProject, priorityOrder: nextOrder })
     .returning();
@@ -81,7 +81,7 @@ router.patch("/linear-priorities/:id", async (req, res): Promise<void> => {
   if (typeof updates.action === "string") {
     updates.action = (updates.action as string).trim().toUpperCase();
   }
-  const [row] = await db
+  const [row] = await sharedDb
     .update(linearPrioritiesTable)
     .set(updates)
     .where(eq(linearPrioritiesTable.id, id))
@@ -95,7 +95,7 @@ router.patch("/linear-priorities/:id", async (req, res): Promise<void> => {
 
 router.delete("/linear-priorities/:id", async (req, res): Promise<void> => {
   const { id } = req.params;
-  await db.delete(linearPrioritiesTable).where(eq(linearPrioritiesTable.id, id));
+  await sharedDb.delete(linearPrioritiesTable).where(eq(linearPrioritiesTable.id, id));
   res.json({ ok: true });
 });
 

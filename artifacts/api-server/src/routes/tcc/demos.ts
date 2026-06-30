@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, demosTable } from "@workspace/db";
+import { sharedDb, demosTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { todayPacific } from "../../lib/dates.js";
 
@@ -7,7 +7,7 @@ const router: IRouter = Router();
 
 async function getTodayDemoCount(): Promise<number> {
   const today = todayPacific();
-  const demos = await db
+  const demos = await sharedDb
     .select()
     .from(demosTable)
     .where(eq(demosTable.scheduledDate, today));
@@ -22,7 +22,7 @@ router.get("/demos/count", async (req, res): Promise<void> => {
 
 router.post("/demos/increment", async (req, res): Promise<void> => {
   const today = todayPacific();
-  await db.insert(demosTable).values({
+  await sharedDb.insert(demosTable).values({
     scheduledDate: today,
     status: "scheduled",
   });
@@ -32,13 +32,13 @@ router.post("/demos/increment", async (req, res): Promise<void> => {
 
 router.post("/demos/decrement", async (req, res): Promise<void> => {
   const today = todayPacific();
-  const [demo] = await db
+  const [demo] = await sharedDb
     .select()
     .from(demosTable)
     .where(eq(demosTable.scheduledDate, today));
   
   if (demo) {
-    await db.delete(demosTable).where(eq(demosTable.id, demo.id));
+    await sharedDb.delete(demosTable).where(eq(demosTable.id, demo.id));
   }
 
   const count = await getTodayDemoCount();

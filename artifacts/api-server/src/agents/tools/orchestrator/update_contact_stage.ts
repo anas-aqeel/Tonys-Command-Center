@@ -1,7 +1,7 @@
 // update_contact_stage — orchestrator wrapper. Updates/inserts contact pipeline stage.
 
 import type { ToolHandler } from "../index.js";
-import { db } from "@workspace/db";
+import { sharedDb } from "@workspace/db";
 import { contactIntelligenceTable } from "../../../lib/schema-v2.js";
 import { eq } from "drizzle-orm";
 
@@ -10,14 +10,14 @@ const handler: ToolHandler = async (input) => {
   const stage = String(input.stage);
   if (!VALID_STAGES.includes(stage)) return `Invalid stage "${stage}". Valid: ${VALID_STAGES.join(", ")}`;
   try {
-    const [existing] = await db.select().from(contactIntelligenceTable)
+    const [existing] = await sharedDb.select().from(contactIntelligenceTable)
       .where(eq(contactIntelligenceTable.contactId, String(input.contact_id))).limit(1);
     if (existing) {
-      await db.update(contactIntelligenceTable)
+      await sharedDb.update(contactIntelligenceTable)
         .set({ stage, updatedAt: new Date() })
         .where(eq(contactIntelligenceTable.contactId, String(input.contact_id)));
     } else {
-      await db.insert(contactIntelligenceTable).values({ contactId: String(input.contact_id), stage });
+      await sharedDb.insert(contactIntelligenceTable).values({ contactId: String(input.contact_id), stage });
     }
     return `✓ Contact stage updated to "${stage}"`;
   } catch (err) {

@@ -15,7 +15,7 @@
 //   6. Mark feedback rows consumed with the right outcome.
 //   7. Mark training run 'success' or 'no_proposal'.
 
-import { db, agentTrainingRunsTable, agentFeedbackTable, agentMemoryProposalsTable } from "@workspace/db";
+import { personalDb, agentTrainingRunsTable, agentFeedbackTable, agentMemoryProposalsTable } from "@workspace/db";
 import { and, eq, inArray } from "drizzle-orm";
 import { runAgent } from "./runtime.js";
 
@@ -61,7 +61,7 @@ export async function analyzeFeedback(input: AnalyzeFeedbackInput): Promise<Anal
   }
 
   // Did Coach create a proposal during the run?
-  const [proposal] = await db.select({ id: agentMemoryProposalsTable.id })
+  const [proposal] = await personalDb.select({ id: agentMemoryProposalsTable.id })
     .from(agentMemoryProposalsTable)
     .where(eq(agentMemoryProposalsTable.trainingRunId, input.trainingRunId))
     .limit(1);
@@ -72,7 +72,7 @@ export async function analyzeFeedback(input: AnalyzeFeedbackInput): Promise<Anal
   // so Tony can retry the Train click. Mirrors sweepStuckRuns() behavior.
   // On success-no-proposal or success-with-proposal: mark consumed with the right outcome.
   if (runFailed) {
-    await db.update(agentFeedbackTable).set({
+    await personalDb.update(agentFeedbackTable).set({
       consumedAt: null,
       trainingRunId: null,
       consumedOutcome: null,
@@ -82,7 +82,7 @@ export async function analyzeFeedback(input: AnalyzeFeedbackInput): Promise<Anal
     ));
   } else {
     const consumedOutcome = proposalId ? "proposal_created" : "no_proposal";
-    await db.update(agentFeedbackTable).set({
+    await personalDb.update(agentFeedbackTable).set({
       consumedAt: new Date(),
       trainingRunId: input.trainingRunId,
       consumedOutcome,
@@ -94,18 +94,18 @@ export async function analyzeFeedback(input: AnalyzeFeedbackInput): Promise<Anal
 
   // Finalize the run.
   if (runFailed) {
-    await db.update(agentTrainingRunsTable).set({
+    await personalDb.update(agentTrainingRunsTable).set({
       status: "failed",
       finishedAt: new Date(),
       failureReason: failureReason || "Coach run failed",
     }).where(eq(agentTrainingRunsTable.id, input.trainingRunId));
   } else if (proposalId) {
-    await db.update(agentTrainingRunsTable).set({
+    await personalDb.update(agentTrainingRunsTable).set({
       status: "success",
       finishedAt: new Date(),
     }).where(eq(agentTrainingRunsTable.id, input.trainingRunId));
   } else {
-    await db.update(agentTrainingRunsTable).set({
+    await personalDb.update(agentTrainingRunsTable).set({
       status: "no_proposal",
       finishedAt: new Date(),
     }).where(eq(agentTrainingRunsTable.id, input.trainingRunId));
@@ -146,16 +146,16 @@ function buildCoachUserMessage(input: AnalyzeFeedbackInput): string {
 async function sweepStuckRuns(agent: string): Promise<void> {
   // Mark any 'running' runs older than 5 minutes as 'failed' so the next Train click can proceed.
   const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000);
-  const stuck = await db.select({ id: agentTrainingRunsTable.id, feedbackIds: agentTrainingRunsTable.feedbackIds })
+  const stuck = await personalDb.select({ id: agentTrainingRunsTable.id, feedbackIds: agentTrainingRunsTable.feedbackIds })
     .from(agentTrainingRunsTable)
     .where(and(eq(agentTrainingRunsTable.agent, agent), eq(agentTrainingRunsTable.status, "running")));
 
   for (const r of stuck) {
     if (r.id) {
-      const [row] = await db.select({ startedAt: agentTrainingRunsTable.startedAt })
+      const [row] = await personalDb.select({ startedAt: agentTrainingRunsTable.startedAt })
         .from(agentTrainingRunsTable).where(eq(agentTrainingRunsTable.id, r.id)).limit(1);
       if (row?.startedAt && row.startedAt < fiveMinAgo) {
-        await db.update(agentTrainingRunsTable).set({
+        await personalDb.update(agentTrainingRunsTable).set({
           status: "failed",
           finishedAt: new Date(),
           failureReason: "TTL sweep — run exceeded 5 minute wall-clock without finishing",
@@ -163,7 +163,7 @@ async function sweepStuckRuns(agent: string): Promise<void> {
 
         // Release the feedback rows back to the queue.
         if (Array.isArray(r.feedbackIds) && r.feedbackIds.length > 0) {
-          await db.update(agentFeedbackTable).set({
+          await personalDb.update(agentFeedbackTable).set({
             consumedAt: null,
             trainingRunId: null,
             consumedOutcome: null,

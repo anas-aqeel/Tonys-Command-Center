@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db } from "@workspace/db";
+import { sharedDb, personalDb } from "@workspace/db";
 import { planItemsTable, brainTrainingLogTable, businessContextTable, teamRolesTable } from "../../lib/schema-v2";
 import { BUSINESS_CONTEXT_DEFAULTS } from "../../lib/business-context-defaults";
 import { eq, and, asc, desc, inArray } from "drizzle-orm";
@@ -252,11 +252,11 @@ const SEED_TASKS: {
 // ─── Seed function ────────────────────────────────────────────────────────────
 
 async function seedPlanIfEmpty(): Promise<void> {
-  const existing = await db.select({ id: planItemsTable.id })
+  const existing = await sharedDb.select({ id: planItemsTable.id })
     .from(planItemsTable).limit(1);
   if (existing.length > 0) return;
 
-  const categoryRows = await db.insert(planItemsTable).values(
+  const categoryRows = await sharedDb.insert(planItemsTable).values(
     SEED_CATEGORIES.map(c => ({
       level: "category" as const,
       category: c.category,
@@ -268,7 +268,7 @@ async function seedPlanIfEmpty(): Promise<void> {
 
   const catByKey = Object.fromEntries(categoryRows.map(r => [r.category, r]));
 
-  const subcatRows = await db.insert(planItemsTable).values(
+  const subcatRows = await sharedDb.insert(planItemsTable).values(
     SEED_SUBCATEGORIES.map(s => ({
       level: "subcategory" as const,
       category: s.category,
@@ -284,7 +284,7 @@ async function seedPlanIfEmpty(): Promise<void> {
     subcatRows.map(r => [`${r.category}:${r.title}`, r])
   );
 
-  await db.insert(planItemsTable).values(
+  await sharedDb.insert(planItemsTable).values(
     SEED_TASKS.map((t, i) => ({
       level: "task" as const,
       category: t.category,
@@ -311,24 +311,24 @@ seedPlanIfEmpty().catch(e => console.warn("[plan] Seed failed:", e.message));
 // ─── Parent completion check ──────────────────────────────────────────────────
 
 async function checkParentCompletion(taskId: string): Promise<void> {
-  const [task] = await db.select().from(planItemsTable).where(eq(planItemsTable.id, taskId));
+  const [task] = await sharedDb.select().from(planItemsTable).where(eq(planItemsTable.id, taskId));
   if (!task || task.level !== "task" || !task.parentId) return;
 
-  const siblings = await db.select().from(planItemsTable)
+  const siblings = await sharedDb.select().from(planItemsTable)
     .where(and(eq(planItemsTable.parentId, task.parentId), eq(planItemsTable.level, "task")));
   const allDone = siblings.length > 0 && siblings.every(s => s.status === "completed");
 
   if (allDone) {
-    await db.update(planItemsTable).set({ status: "completed", completedAt: new Date(), updatedAt: new Date() })
+    await sharedDb.update(planItemsTable).set({ status: "completed", completedAt: new Date(), updatedAt: new Date() })
       .where(eq(planItemsTable.id, task.parentId));
 
-    const [subcat] = await db.select().from(planItemsTable).where(eq(planItemsTable.id, task.parentId));
+    const [subcat] = await sharedDb.select().from(planItemsTable).where(eq(planItemsTable.id, task.parentId));
     if (subcat?.parentId) {
-      const parentSiblings = await db.select().from(planItemsTable)
+      const parentSiblings = await sharedDb.select().from(planItemsTable)
         .where(and(eq(planItemsTable.parentId, subcat.parentId), eq(planItemsTable.level, "subcategory")));
       const parentAllDone = parentSiblings.length > 0 && parentSiblings.every(s => s.status === "completed");
       if (parentAllDone) {
-        await db.update(planItemsTable).set({ status: "completed", completedAt: new Date(), updatedAt: new Date() })
+        await sharedDb.update(planItemsTable).set({ status: "completed", completedAt: new Date(), updatedAt: new Date() })
           .where(eq(planItemsTable.id, subcat.parentId));
       }
     }
@@ -369,7 +369,7 @@ async function syncLinearComplete(linearId: string, complete: boolean): Promise<
 // GET /plan/categories — full hierarchy for 411 plan view
 router.get("/plan/categories", async (_req, res): Promise<void> => {
   try {
-    const all = await db.select().from(planItemsTable).orderBy(asc(planItemsTable.priorityOrder), asc(planItemsTable.createdAt));
+    const all = await sharedDb.select().from(planItemsTable).orderBy(asc(planItemsTable.priorityOrder), asc(planItemsTable.createdAt));
     const categories = all.filter(i => i.level === "category");
     const subcategories = all.filter(i => i.level === "subcategory");
     const tasks = all.filter(i => i.level === "task");
@@ -405,7 +405,7 @@ router.get("/plan/categories", async (_req, res): Promise<void> => {
 // GET /plan — alias
 router.get("/plan", async (_req, res): Promise<void> => {
   try {
-    const all = await db.select().from(planItemsTable).orderBy(asc(planItemsTable.priorityOrder), asc(planItemsTable.createdAt));
+    const all = await sharedDb.select().from(planItemsTable).orderBy(asc(planItemsTable.priorityOrder), asc(planItemsTable.createdAt));
     res.json({ items: all });
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
@@ -417,7 +417,7 @@ router.get("/plan/weekly/:month", async (req, res): Promise<void> => {
   try {
     const { month } = req.params; // e.g. "2026-04"
     // Fetch ALL level=task rows — masters AND their children — so we can compute child stats
-    const allTasks = await db.select().from(planItemsTable)
+    const allTasks = await sharedDb.select().from(planItemsTable)
       .where(eq(planItemsTable.level, "task"))
       .orderBy(asc(planItemsTable.priorityOrder));
 
@@ -472,7 +472,7 @@ router.get("/plan/tasks", async (req, res): Promise<void> => {
     if (req.query.owner) filters.push(eq(planItemsTable.owner, req.query.owner as string));
     if (req.query.status) filters.push(eq(planItemsTable.status, req.query.status as string));
 
-    const tasks = await db.select().from(planItemsTable)
+    const tasks = await sharedDb.select().from(planItemsTable)
       .where(and(...filters))
       .orderBy(asc(planItemsTable.priorityOrder), asc(planItemsTable.category));
 
@@ -491,7 +491,7 @@ router.get("/plan/tasks", async (req, res): Promise<void> => {
 router.get("/plan/top3", async (_req, res): Promise<void> => {
   try {
     // Fetch ALL active tasks so sprint ID computation has full context
-    const allActive = await db.select().from(planItemsTable)
+    const allActive = await sharedDb.select().from(planItemsTable)
       .where(and(eq(planItemsTable.level, "task"), eq(planItemsTable.status, "active")))
       .orderBy(asc(planItemsTable.priorityOrder));
 
@@ -525,7 +525,7 @@ router.get("/plan/top3", async (_req, res): Promise<void> => {
 router.get("/plan/subcategories/:category", async (req, res): Promise<void> => {
   try {
     const { category } = req.params;
-    const subs = await db.select().from(planItemsTable)
+    const subs = await sharedDb.select().from(planItemsTable)
       .where(and(eq(planItemsTable.level, "subcategory"), eq(planItemsTable.category, category)))
       .orderBy(asc(planItemsTable.priorityOrder));
     res.json({ subcategories: subs });
@@ -538,11 +538,11 @@ router.get("/plan/subcategories/:category", async (req, res): Promise<void> => {
 router.post("/plan/task/:id/complete", async (req, res): Promise<void> => {
   try {
     const { id } = req.params;
-    const [item] = await db.select().from(planItemsTable).where(eq(planItemsTable.id, id));
+    const [item] = await sharedDb.select().from(planItemsTable).where(eq(planItemsTable.id, id));
     if (!item) { res.status(404).json({ error: "Not found" }); return; }
 
     if (item.level !== "task") {
-      const subItems = await db.select().from(planItemsTable)
+      const subItems = await sharedDb.select().from(planItemsTable)
         .where(and(eq(planItemsTable.parentId, id), eq(planItemsTable.status, "active")));
       if (subItems.length > 0) {
         res.status(400).json({ error: `${subItems.length} ${item.level === "category" ? "subcategories" : "tasks"} remaining — complete all first` });
@@ -550,7 +550,7 @@ router.post("/plan/task/:id/complete", async (req, res): Promise<void> => {
       }
     }
 
-    const [updated] = await db.update(planItemsTable)
+    const [updated] = await sharedDb.update(planItemsTable)
       .set({ status: "completed", completedAt: new Date(), completedBy: "Tony", updatedAt: new Date() })
       .where(eq(planItemsTable.id, id)).returning();
 
@@ -573,19 +573,19 @@ router.post("/plan/task/:id/complete", async (req, res): Promise<void> => {
 router.post("/plan/task/:id/uncomplete", async (req, res): Promise<void> => {
   try {
     const { id } = req.params;
-    const [item] = await db.select().from(planItemsTable).where(eq(planItemsTable.id, id));
+    const [item] = await sharedDb.select().from(planItemsTable).where(eq(planItemsTable.id, id));
     if (!item) { res.status(404).json({ error: "Not found" }); return; }
 
-    const [updated] = await db.update(planItemsTable)
+    const [updated] = await sharedDb.update(planItemsTable)
       .set({ status: "active", completedAt: null, completedBy: null, updatedAt: new Date() })
       .where(eq(planItemsTable.id, id)).returning();
 
     if (updated.parentId) {
-      await db.update(planItemsTable).set({ status: "active", completedAt: null, updatedAt: new Date() })
+      await sharedDb.update(planItemsTable).set({ status: "active", completedAt: null, updatedAt: new Date() })
         .where(eq(planItemsTable.id, updated.parentId));
-      const [parent] = await db.select().from(planItemsTable).where(eq(planItemsTable.id, updated.parentId));
+      const [parent] = await sharedDb.select().from(planItemsTable).where(eq(planItemsTable.id, updated.parentId));
       if (parent?.parentId) {
-        await db.update(planItemsTable).set({ status: "active", completedAt: null, updatedAt: new Date() })
+        await sharedDb.update(planItemsTable).set({ status: "active", completedAt: null, updatedAt: new Date() })
           .where(eq(planItemsTable.id, parent.parentId));
       }
     }
@@ -621,7 +621,7 @@ router.patch("/plan/item/:id", async (req, res): Promise<void> => {
         // Server-side guard for the FE's "highlighted tasks must have a due
         // date" rule. We look up the current row first to know its dueDate
         // and the incoming-patch dueDate to decide.
-        const [current] = await db.select({ dueDate: planItemsTable.dueDate }).from(planItemsTable).where(eq(planItemsTable.id, id)).limit(1);
+        const [current] = await sharedDb.select({ dueDate: planItemsTable.dueDate }).from(planItemsTable).where(eq(planItemsTable.id, id)).limit(1);
         const willHaveDueDate = req.body.dueDate !== undefined ? !!req.body.dueDate : !!current?.dueDate;
         if (!willHaveDueDate) {
           res.status(400).json({ error: "Highlighted tasks must have a due date." });
@@ -633,7 +633,7 @@ router.patch("/plan/item/:id", async (req, res): Promise<void> => {
         updates.highlightNote = null;
       }
     }
-    const [updated] = await db.update(planItemsTable).set(updates).where(eq(planItemsTable.id, id)).returning();
+    const [updated] = await sharedDb.update(planItemsTable).set(updates).where(eq(planItemsTable.id, id)).returning();
     if (!updated) { res.status(404).json({ error: "Not found" }); return; }
     triggerSheetsSync();
     res.json({ ok: true, item: updated });
@@ -661,7 +661,7 @@ router.post("/plan/task", async (req, res): Promise<void> => {
       return;
     }
     if (parentTaskId) {
-      const [parentRow] = await db.select().from(planItemsTable).where(eq(planItemsTable.id, parentTaskId));
+      const [parentRow] = await sharedDb.select().from(planItemsTable).where(eq(planItemsTable.id, parentTaskId));
       if (!parentRow || parentRow.level !== "task" || parentRow.taskType !== "master") {
         res.status(400).json({ error: "parentTaskId must reference an existing Master task" });
         return;
@@ -669,14 +669,14 @@ router.post("/plan/task", async (req, res): Promise<void> => {
     }
 
     // Find parent subcategory
-    const [subcatRow] = await db.select().from(planItemsTable).where(and(
+    const [subcatRow] = await sharedDb.select().from(planItemsTable).where(and(
       eq(planItemsTable.level, "subcategory"),
       eq(planItemsTable.category, category),
       eq(planItemsTable.title, subcategoryName)
     ));
 
     // Find parent category
-    const [catRow] = await db.select().from(planItemsTable).where(and(
+    const [catRow] = await sharedDb.select().from(planItemsTable).where(and(
       eq(planItemsTable.level, "category"),
       eq(planItemsTable.category, category)
     ));
@@ -687,7 +687,7 @@ router.post("/plan/task", async (req, res): Promise<void> => {
       ? and(eq(planItemsTable.level, "task"), eq(planItemsTable.category, category), eq(planItemsTable.taskType, "master"))
       : and(eq(planItemsTable.level, "task"), eq(planItemsTable.parentTaskId, parentTaskId));
 
-    const existingTasks = await db.select().from(planItemsTable)
+    const existingTasks = await sharedDb.select().from(planItemsTable)
       .where(siblingWhere)
       .orderBy(asc(planItemsTable.priorityOrder));
 
@@ -714,13 +714,13 @@ router.post("/plan/task", async (req, res): Promise<void> => {
     // Shift all siblings at or after the insertion point up by 1
     for (const t of existingTasks) {
       if ((t.priorityOrder ?? 0) >= insertOrder) {
-        await db.update(planItemsTable).set({ priorityOrder: (t.priorityOrder ?? 0) + 1 })
+        await sharedDb.update(planItemsTable).set({ priorityOrder: (t.priorityOrder ?? 0) + 1 })
           .where(eq(planItemsTable.id, t.id));
       }
     }
 
     // Create the task
-    const [created] = await db.insert(planItemsTable).values({
+    const [created] = await sharedDb.insert(planItemsTable).values({
       level: "task" as const,
       category,
       subcategory: subcategoryName || null,
@@ -743,13 +743,13 @@ router.post("/plan/task", async (req, res): Promise<void> => {
     }).returning();
 
     // Re-normalize priority orders (make them sequential integers)
-    const allTasksAfter = await db.select({ id: planItemsTable.id })
+    const allTasksAfter = await sharedDb.select({ id: planItemsTable.id })
       .from(planItemsTable)
       .where(and(eq(planItemsTable.level, "task"), eq(planItemsTable.category, category)))
       .orderBy(asc(planItemsTable.priorityOrder));
 
     for (let i = 0; i < allTasksAfter.length; i++) {
-      await db.update(planItemsTable).set({ priorityOrder: i })
+      await sharedDb.update(planItemsTable).set({ priorityOrder: i })
         .where(eq(planItemsTable.id, allTasksAfter[i].id));
     }
 
@@ -780,7 +780,7 @@ router.post("/plan/task", async (req, res): Promise<void> => {
     );
     if (shouldNotifyOwner) {
       try {
-        const [tm] = await db.select().from(teamRolesTable).where(eq(teamRolesTable.name, owner)).limit(1);
+        const [tm] = await sharedDb.select().from(teamRolesTable).where(eq(teamRolesTable.name, owner)).limit(1);
         if (tm?.slackId) {
           const isLinearCreate = source === "Linear" && !linearId;
           const dueLine = dueDate ? `\n*Due:* ${dueDate}` : "";
@@ -833,7 +833,7 @@ router.post("/plan/reorder", async (req, res): Promise<void> => {
     if (!Array.isArray(items)) { res.status(400).json({ error: "items must be array" }); return; }
 
     for (const item of items) {
-      await db.update(planItemsTable)
+      await sharedDb.update(planItemsTable)
         .set({ priorityOrder: item.priorityOrder, updatedAt: new Date() })
         .where(eq(planItemsTable.id, item.id));
     }
@@ -882,7 +882,7 @@ Write a concise 2-3 sentence reflection (under 80 words) that is relevant to the
         console.warn("[plan/reorder] Claude reflection failed:", e);
       }
 
-      await db.insert(brainTrainingLogTable).values({
+      await personalDb.insert(brainTrainingLogTable).values({
         movedItemId,
         movedItemTitle: movedItemTitle || null,
         fromPosition: fromPosition ?? null,
@@ -934,7 +934,7 @@ router.get("/plan/brain/order", async (req, res): Promise<void> => {
     const mode = (req.query.mode === "all") ? "all" : "top50";
     const TOP_LIMIT = 50;
 
-    const allActive = await db.select().from(planItemsTable)
+    const allActive = await sharedDb.select().from(planItemsTable)
       .where(and(eq(planItemsTable.level, "task"), eq(planItemsTable.status, "active")))
       .orderBy(asc(planItemsTable.priorityOrder));
 
@@ -948,20 +948,20 @@ router.get("/plan/brain/order", async (req, res): Promise<void> => {
     const activeTasks = mode === "all" ? allActive : allActive.slice(0, TOP_LIMIT);
     const tailTasks = mode === "all" ? [] : allActive.slice(TOP_LIMIT);
 
-    const recentLogs = await db.select().from(brainTrainingLogTable)
+    const recentLogs = await personalDb.select().from(brainTrainingLogTable)
       .orderBy(desc(brainTrainingLogTable.createdAt))
       .limit(20);
 
     let brainContext = "";
     try {
-      const [ctx] = await db.select().from(businessContextTable)
+      const [ctx] = await sharedDb.select().from(businessContextTable)
         .where(eq(businessContextTable.documentType, "brain_context"));
       if (ctx?.content) brainContext = ctx.content;
     } catch { /**/ }
 
     let businessPlanCtx = "";
     try {
-      const [bp] = await db.select().from(businessContextTable)
+      const [bp] = await sharedDb.select().from(businessContextTable)
         .where(eq(businessContextTable.documentType, "business_plan"));
       if (bp?.content) businessPlanCtx = bp.content.substring(0, 3000);
     } catch { /**/ }
@@ -1077,7 +1077,7 @@ Return ONLY a JSON object with key "priorityOrder" — array of ALL task IDs in 
 // GET /plan/brain/logs — recent training log entries
 router.get("/plan/brain/logs", async (req, res): Promise<void> => {
   try {
-    const logs = await db.select().from(brainTrainingLogTable)
+    const logs = await personalDb.select().from(brainTrainingLogTable)
       .orderBy(desc(brainTrainingLogTable.createdAt))
       .limit(50);
     res.json({ logs });
@@ -1111,12 +1111,12 @@ router.get("/business/context/:documentType", async (req, res): Promise<void> =>
     if (!isValidDocType(documentType)) {
       res.status(400).json({ error: `Unknown documentType: ${documentType}` }); return;
     }
-    let [ctx] = await db.select().from(businessContextTable)
+    let [ctx] = await sharedDb.select().from(businessContextTable)
       .where(eq(businessContextTable.documentType, documentType));
     // First-read seed — keeps the old hardcoded text alive without a separate migration.
     if (!ctx && BUSINESS_CONTEXT_DEFAULTS[documentType]) {
       const seed = BUSINESS_CONTEXT_DEFAULTS[documentType];
-      const [inserted] = await db.insert(businessContextTable).values({
+      const [inserted] = await sharedDb.insert(businessContextTable).values({
         documentType,
         content: seed.content,
         summary: seed.summary,
@@ -1144,14 +1144,14 @@ router.put("/business/context/:documentType", async (req, res): Promise<void> =>
     const { content, summary } = req.body as { content: string; summary?: string };
     if (typeof content !== "string") { res.status(400).json({ error: "content is required" }); return; }
     const cleaned = content.trim();
-    const existing = await db.select().from(businessContextTable)
+    const existing = await sharedDb.select().from(businessContextTable)
       .where(eq(businessContextTable.documentType, documentType));
     if (existing.length > 0) {
-      await db.update(businessContextTable)
+      await sharedDb.update(businessContextTable)
         .set({ content: cleaned, summary: summary ?? existing[0].summary, lastUpdated: new Date() })
         .where(eq(businessContextTable.documentType, documentType));
     } else {
-      await db.insert(businessContextTable).values({
+      await sharedDb.insert(businessContextTable).values({
         documentType,
         content: cleaned,
         summary: summary || BUSINESS_CONTEXT_DEFAULTS[documentType]?.summary || null,
@@ -1168,14 +1168,14 @@ router.put("/plan/brain/context", async (req, res): Promise<void> => {
   try {
     const { content } = req.body as { content: string };
     if (!content?.trim()) { res.status(400).json({ error: "content is required" }); return; }
-    const existing = await db.select().from(businessContextTable)
+    const existing = await sharedDb.select().from(businessContextTable)
       .where(eq(businessContextTable.documentType, "brain_context"));
     if (existing.length > 0) {
-      await db.update(businessContextTable)
+      await sharedDb.update(businessContextTable)
         .set({ content: content.trim(), lastUpdated: new Date() })
         .where(eq(businessContextTable.documentType, "brain_context"));
     } else {
-      await db.insert(businessContextTable).values({
+      await sharedDb.insert(businessContextTable).values({
         documentType: "brain_context",
         content: content.trim(),
         summary: "Tony's brain context for AI sprint prioritization",
@@ -1189,7 +1189,7 @@ router.put("/plan/brain/context", async (req, res): Promise<void> => {
 
 router.get("/plan/brain/context", async (req, res): Promise<void> => {
   try {
-    const [ctx] = await db.select().from(businessContextTable)
+    const [ctx] = await sharedDb.select().from(businessContextTable)
       .where(eq(businessContextTable.documentType, "brain_context"));
     res.json({ content: ctx?.content || "", lastUpdated: ctx?.lastUpdated || null });
   } catch (err) {
@@ -1204,12 +1204,12 @@ router.delete("/plan/task/:id", async (req, res): Promise<void> => {
     const { id } = req.params;
     const action = (req.query.action as string) || "cascade";
 
-    const [target] = await db.select().from(planItemsTable).where(eq(planItemsTable.id, id));
+    const [target] = await sharedDb.select().from(planItemsTable).where(eq(planItemsTable.id, id));
     if (!target) { res.status(404).json({ error: "Task not found" }); return; }
 
     // Only Master tasks can have children, so orphan logic only applies to them
     if (target.taskType === "master") {
-      const children = await db.select().from(planItemsTable)
+      const children = await sharedDb.select().from(planItemsTable)
         .where(eq(planItemsTable.parentTaskId, id));
 
       if (children.length > 0) {
@@ -1218,16 +1218,16 @@ router.delete("/plan/task/:id", async (req, res): Promise<void> => {
           const subChildIds = children.filter(c => c.taskType === "subtask").map(c => c.id);
           const noteChildIds = children.filter(c => c.taskType === "note").map(c => c.id);
           if (subChildIds.length > 0) {
-            await db.update(planItemsTable)
+            await sharedDb.update(planItemsTable)
               .set({ taskType: "master", parentTaskId: null })
               .where(inArray(planItemsTable.id, subChildIds));
           }
           if (noteChildIds.length > 0) {
-            await db.delete(planItemsTable).where(inArray(planItemsTable.id, noteChildIds));
+            await sharedDb.delete(planItemsTable).where(inArray(planItemsTable.id, noteChildIds));
           }
         } else if (action === "cascade") {
           // Delete all children (sub-tasks and notes)
-          await db.delete(planItemsTable).where(eq(planItemsTable.parentTaskId, id));
+          await sharedDb.delete(planItemsTable).where(eq(planItemsTable.parentTaskId, id));
         } else if (action === "orphan") {
           // Leave children with dangling parentTaskId (they'll render in "Orphaned" group)
           // No-op — children stay as-is
@@ -1235,7 +1235,7 @@ router.delete("/plan/task/:id", async (req, res): Promise<void> => {
       }
     }
 
-    await db.delete(planItemsTable).where(eq(planItemsTable.id, id));
+    await sharedDb.delete(planItemsTable).where(eq(planItemsTable.id, id));
     triggerSheetsSync();
     res.json({ ok: true, action });
   } catch (err) {
@@ -1247,7 +1247,7 @@ router.delete("/plan/task/:id", async (req, res): Promise<void> => {
 router.get("/plan/task/:id/children", async (req, res): Promise<void> => {
   try {
     const { id } = req.params;
-    const children = await db.select({ id: planItemsTable.id, taskType: planItemsTable.taskType, title: planItemsTable.title })
+    const children = await sharedDb.select({ id: planItemsTable.id, taskType: planItemsTable.taskType, title: planItemsTable.title })
       .from(planItemsTable)
       .where(eq(planItemsTable.parentTaskId, id));
     const subCount = children.filter(c => c.taskType === "subtask").length;
@@ -1261,20 +1261,20 @@ router.get("/plan/task/:id/children", async (req, res): Promise<void> => {
 // ─── Brain scoring helper for new Linear tasks ───────────────────────────────
 async function brainScoreNewTask(title: string, category: string, priority: string): Promise<number> {
   try {
-    const activeTasks = await db.select({ id: planItemsTable.id, title: planItemsTable.title, category: planItemsTable.category, priority: planItemsTable.priority, priorityOrder: planItemsTable.priorityOrder })
+    const activeTasks = await sharedDb.select({ id: planItemsTable.id, title: planItemsTable.title, category: planItemsTable.category, priority: planItemsTable.priority, priorityOrder: planItemsTable.priorityOrder })
       .from(planItemsTable)
       .where(and(eq(planItemsTable.level, "task"), eq(planItemsTable.status, "active")))
       .orderBy(asc(planItemsTable.priorityOrder));
 
     if (activeTasks.length === 0) return 0;
 
-    const recentLogs = await db.select().from(brainTrainingLogTable)
+    const recentLogs = await personalDb.select().from(brainTrainingLogTable)
       .orderBy(desc(brainTrainingLogTable.createdAt))
       .limit(10);
 
     let brainContext = "";
     try {
-      const [ctx] = await db.select().from(businessContextTable)
+      const [ctx] = await sharedDb.select().from(businessContextTable)
         .where(eq(businessContextTable.documentType, "brain_context"));
       if (ctx?.content) brainContext = ctx.content.substring(0, 1000);
     } catch { /**/ }
@@ -1369,7 +1369,7 @@ router.post("/plan/linear-webhook", async (req, res): Promise<void> => {
       }
 
       // Check if already imported
-      const [existing] = await db.select().from(planItemsTable)
+      const [existing] = await sharedDb.select().from(planItemsTable)
         .where(and(eq(planItemsTable.linearId, linearId), eq(planItemsTable.level, "task")));
       if (existing) {
         res.json({ ok: true, skipped: true, reason: "already exists" });
@@ -1393,20 +1393,20 @@ router.post("/plan/linear-webhook", async (req, res): Promise<void> => {
       const insertAt = await brainScoreNewTask(title, category, priority);
 
       // Shift existing tasks down to make room
-      const activeTasks = await db.select({ id: planItemsTable.id, priorityOrder: planItemsTable.priorityOrder })
+      const activeTasks = await sharedDb.select({ id: planItemsTable.id, priorityOrder: planItemsTable.priorityOrder })
         .from(planItemsTable)
         .where(and(eq(planItemsTable.level, "task"), eq(planItemsTable.status, "active")))
         .orderBy(asc(planItemsTable.priorityOrder));
 
       for (const t of activeTasks) {
         if ((t.priorityOrder ?? 0) >= insertAt) {
-          await db.update(planItemsTable)
+          await sharedDb.update(planItemsTable)
             .set({ priorityOrder: (t.priorityOrder ?? 0) + 1, updatedAt: new Date() })
             .where(eq(planItemsTable.id, t.id));
         }
       }
 
-      const [newTask] = await db.insert(planItemsTable).values({
+      const [newTask] = await sharedDb.insert(planItemsTable).values({
         level: "task",
         category,
         title: title.trim(),
@@ -1432,7 +1432,7 @@ router.post("/plan/linear-webhook", async (req, res): Promise<void> => {
         return;
       }
 
-      const [task] = await db.select().from(planItemsTable)
+      const [task] = await sharedDb.select().from(planItemsTable)
         .where(and(eq(planItemsTable.linearId, linearId), eq(planItemsTable.level, "task")));
 
       if (!task) {
@@ -1441,13 +1441,13 @@ router.post("/plan/linear-webhook", async (req, res): Promise<void> => {
       }
 
       if (stateType === "completed" && task.status !== "completed") {
-        await db.update(planItemsTable)
+        await sharedDb.update(planItemsTable)
           .set({ status: "completed", completedAt: new Date(), completedBy: "Linear", updatedAt: new Date() })
           .where(eq(planItemsTable.id, task.id));
         await checkParentCompletion(task.id);
         console.log(`[plan] Linear webhook: marked ${task.title} completed`);
       } else if ((stateType === "started" || stateType === "unstarted") && task.status === "completed") {
-        await db.update(planItemsTable)
+        await sharedDb.update(planItemsTable)
           .set({ status: "active", completedAt: null, completedBy: null, updatedAt: new Date() })
           .where(eq(planItemsTable.id, task.id));
       }
@@ -1465,7 +1465,7 @@ router.post("/plan/linear-webhook", async (req, res): Promise<void> => {
 // POST /plan/seed — re-seed (admin)
 router.post("/plan/seed", async (_req, res): Promise<void> => {
   try {
-    await db.delete(planItemsTable);
+    await sharedDb.delete(planItemsTable);
     await seedPlanIfEmpty();
     res.json({ ok: true });
   } catch (err) {

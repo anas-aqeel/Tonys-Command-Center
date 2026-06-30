@@ -1,13 +1,12 @@
 import { Router, type IRouter } from "express";
 import { eq, asc } from "drizzle-orm";
-import { db } from "@workspace/db";
-import { scratchNotesTable } from "@workspace/db";
+import { personalDb, scratchNotesTable } from "@workspace/db";
 import { z } from "zod/v4";
 
 const router: IRouter = Router();
 
 router.get("/notes/scratch", async (req, res): Promise<void> => {
-  const notes = await db
+  const notes = await personalDb
     .select()
     .from(scratchNotesTable)
     .orderBy(asc(scratchNotesTable.position), asc(scratchNotesTable.createdAt));
@@ -25,14 +24,14 @@ router.post("/notes/scratch", async (req, res): Promise<void> => {
     return;
   }
 
-  const existing = await db
+  const existing = await personalDb
     .select({ position: scratchNotesTable.position })
     .from(scratchNotesTable)
     .orderBy(asc(scratchNotesTable.position));
 
   const maxPos = existing.length > 0 ? existing[existing.length - 1].position + 1 : 0;
 
-  const [note] = await db
+  const [note] = await personalDb
     .insert(scratchNotesTable)
     .values({ text: parsed.data.text, checked: false, position: maxPos })
     .returning();
@@ -59,7 +58,7 @@ router.patch("/notes/scratch/:id", async (req, res): Promise<void> => {
   if (parsed.data.checked !== undefined) updates.checked = parsed.data.checked;
   if (parsed.data.text !== undefined) updates.text = parsed.data.text;
 
-  const [note] = await db
+  const [note] = await personalDb
     .update(scratchNotesTable)
     .set(updates)
     .where(eq(scratchNotesTable.id, id))
@@ -76,7 +75,7 @@ router.patch("/notes/scratch/:id", async (req, res): Promise<void> => {
 router.delete("/notes/scratch/:id", async (req, res): Promise<void> => {
   const { id } = req.params;
 
-  await db.delete(scratchNotesTable).where(eq(scratchNotesTable.id, id));
+  await personalDb.delete(scratchNotesTable).where(eq(scratchNotesTable.id, id));
 
   res.json({ ok: true });
 });

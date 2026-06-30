@@ -1,10 +1,10 @@
 import { Router, type IRouter } from "express";
-import { db, systemInstructionsTable } from "@workspace/db";
+import { personalDb, systemInstructionsTable } from "@workspace/db";
 
 const router: IRouter = Router();
 
 router.get("/system-instructions", async (req, res): Promise<void> => {
-  const rows = await db.select().from(systemInstructionsTable);
+  const rows = await personalDb.select().from(systemInstructionsTable);
   const result: Record<string, string> = {};
   for (const row of rows) {
     result[row.section] = row.content;
@@ -20,7 +20,7 @@ router.post("/system-instructions", async (req, res): Promise<void> => {
   }
 
   // Use ON CONFLICT DO UPDATE to avoid select-then-insert race condition
-  await db
+  await personalDb
     .insert(systemInstructionsTable)
     .values({ section: key, content: text })
     .onConflictDoUpdate({

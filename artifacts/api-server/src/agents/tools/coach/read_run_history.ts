@@ -2,7 +2,7 @@
 // Used when reasoning about whether the issue is a memory gap vs a brittle skill body.
 
 import type { ToolHandler } from "../index.js";
-import { db, agentRunsTable } from "@workspace/db";
+import { personalDb, agentRunsTable } from "@workspace/db";
 import { and, eq, desc } from "drizzle-orm";
 
 interface Input {
@@ -18,7 +18,7 @@ const handler: ToolHandler = async (input) => {
   }
   const cap = Math.min(Math.max(1, limit), 100);
 
-  const rows = await db.select({
+  const rows = await personalDb.select({
     caller: agentRunsTable.caller,
     input_tokens: agentRunsTable.inputTokens,
     output_tokens: agentRunsTable.outputTokens,

@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { eq } from "drizzle-orm";
-import { db, journalsTable, checkinsTable } from "@workspace/db";
+import { personalDb, journalsTable, checkinsTable } from "@workspace/db";
 import { SaveJournalBody } from "@workspace/api-zod";
 import { anthropic, createTrackedMessage } from "@workspace/integrations-anthropic-ai";
 import { todayPacific } from "../../lib/dates.js";
@@ -14,7 +14,7 @@ const router: IRouter = Router();
 
 router.get("/journal/today", async (req, res): Promise<void> => {
   const today = todayPacific();
-  const [journal] = await db
+  const [journal] = await personalDb
     .select()
     .from(journalsTable)
     .where(eq(journalsTable.date, today));
@@ -141,11 +141,11 @@ Output EXACTLY this format and nothing else (start immediately with ### Daily Jo
   }
 
   // Check if today's journal already exists (to avoid duplicate Doc prepends on edit)
-  const [existingJournal] = await db.select({ id: journalsTable.id }).from(journalsTable).where(eq(journalsTable.date, today)).limit(1);
+  const [existingJournal] = await personalDb.select({ id: journalsTable.id }).from(journalsTable).where(eq(journalsTable.date, today)).limit(1);
   const isEdit = !!existingJournal;
 
   // Use ON CONFLICT DO UPDATE to avoid select-then-insert race condition
-  const [journal] = await db
+  const [journal] = await personalDb
     .insert(journalsTable)
     .values({ date: today, rawText, formattedText, mood, keyEvents, reflection })
     .onConflictDoUpdate({
@@ -155,13 +155,13 @@ Output EXACTLY this format and nothing else (start immediately with ### Daily Jo
     .returning();
 
   // Mark journal complete on today's checkin (fire-and-forget, non-blocking)
-  db.update(checkinsTable)
+  personalDb.update(checkinsTable)
     .set({ journal: true })
     .where(eq(checkinsTable.date, today))
     .catch(err => console.error("[journal] Failed to mark checkin journal=true:", err));
 
   // Append to Google Doc: always on first entry, retry if previous write failed
-  const existingUrl = isEdit ? (await db.select({ docsPageUrl: journalsTable.docsPageUrl }).from(journalsTable).where(eq(journalsTable.date, today)).limit(1))[0]?.docsPageUrl : null;
+  const existingUrl = isEdit ? (await personalDb.select({ docsPageUrl: journalsTable.docsPageUrl }).from(journalsTable).where(eq(journalsTable.date, today)).limit(1))[0]?.docsPageUrl : null;
   const shouldWriteDoc = rawText !== "[skipped]" && formattedText && (!isEdit || !existingUrl);
   if (shouldWriteDoc) {
     // If AI formatting failed (no mood/keyEvents), wrap raw text in the standard format
@@ -174,7 +174,7 @@ Output EXACTLY this format and nothing else (start immediately with ### Daily Jo
     appendToDoc(JOURNAL_DOC_ID, entryWithSeparator)
       .then(() => {
         const docsUrl = `https://docs.google.com/document/d/${JOURNAL_DOC_ID}/edit`;
-        db.update(journalsTable).set({ docsPageUrl: docsUrl } as any).where(eq(journalsTable.date, today)).catch(() => {});
+        personalDb.update(journalsTable).set({ docsPageUrl: docsUrl } as any).where(eq(journalsTable.date, today)).catch(() => {});
         console.log("[journal] Appended to Google Doc successfully");
       })
       .catch(err => console.error("[journal] Doc append failed (non-fatal):", err));

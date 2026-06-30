@@ -18,7 +18,7 @@
 
 import { Router, type IRouter } from "express";
 import { z } from "zod";
-import { db, chatThreadsTable, chatMessagesTable } from "@workspace/db";
+import { personalDb, chatThreadsTable, chatMessagesTable } from "@workspace/db";
 import { eq, asc } from "drizzle-orm";
 import { runAgent } from "../../agents/runtime.js";
 import { isAgentRuntimeEnabled } from "../../agents/flags.js";
@@ -47,13 +47,13 @@ router.post("/v2/chat/threads/:threadId/messages", async (req, res): Promise<voi
   const userText = parsed.data.content;
 
   // Verify the thread exists.
-  const [thread] = await db.select().from(chatThreadsTable)
+  const [thread] = await personalDb.select().from(chatThreadsTable)
     .where(eq(chatThreadsTable.id, threadId))
     .limit(1);
   if (!thread) { res.status(404).json({ error: "thread not found" }); return; }
 
   // Persist the user turn first so it's reflected even if AI fails.
-  await db.insert(chatMessagesTable).values({
+  await personalDb.insert(chatMessagesTable).values({
     threadId,
     role: "user",
     content: userText,
@@ -68,7 +68,7 @@ router.post("/v2/chat/threads/:threadId/messages", async (req, res): Promise<voi
     });
 
     // Persist the assistant turn (text only — tool_calls captured in agent_runs).
-    const [assistantRow] = await db.insert(chatMessagesTable).values({
+    const [assistantRow] = await personalDb.insert(chatMessagesTable).values({
       threadId,
       role: "assistant",
       content: result.text,
@@ -76,7 +76,7 @@ router.post("/v2/chat/threads/:threadId/messages", async (req, res): Promise<voi
     }).returning({ id: chatMessagesTable.id });
 
     // Bump thread updatedAt
-    await db.update(chatThreadsTable)
+    await personalDb.update(chatThreadsTable)
       .set({ updatedAt: new Date() })
       .where(eq(chatThreadsTable.id, threadId))
       .catch(() => { /* non-critical */ });
@@ -94,7 +94,7 @@ router.post("/v2/chat/threads/:threadId/messages", async (req, res): Promise<voi
         });
         titleGenerated = titleResult.text.trim().slice(0, 80);
         if (titleGenerated) {
-          await db.update(chatThreadsTable)
+          await personalDb.update(chatThreadsTable)
             .set({ title: titleGenerated })
             .where(eq(chatThreadsTable.id, threadId));
         }
@@ -113,7 +113,7 @@ router.post("/v2/chat/threads/:threadId/messages", async (req, res): Promise<voi
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     // Persist a brief error as the assistant turn so the UI shows something
-    await db.insert(chatMessagesTable).values({
+    await personalDb.insert(chatMessagesTable).values({
       threadId,
       role: "assistant",
       content: `(orchestrator error: ${errMsg.slice(0, 200)})`,

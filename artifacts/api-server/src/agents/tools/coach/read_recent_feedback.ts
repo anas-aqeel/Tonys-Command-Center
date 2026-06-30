@@ -2,7 +2,7 @@
 // Used to detect cross-batch patterns (this Train run + ambient context).
 
 import type { ToolHandler } from "../index.js";
-import { db, agentFeedbackTable } from "@workspace/db";
+import { personalDb, agentFeedbackTable } from "@workspace/db";
 import { eq, desc } from "drizzle-orm";
 
 interface Input {
@@ -17,7 +17,7 @@ const handler: ToolHandler = async (input) => {
   }
   const cap = Math.min(Math.max(1, limit), 200);
 
-  const rows = await db.select().from(agentFeedbackTable)
+  const rows = await personalDb.select().from(agentFeedbackTable)
     .where(eq(agentFeedbackTable.agent, agent))
     .orderBy(desc(agentFeedbackTable.createdAt))
     .limit(cap);

@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { z } from "zod";
-import { db, contactsTable } from "@workspace/db";
+import { sharedDb, contactsTable } from "@workspace/db";
 import { contactIntelligenceTable, communicationLogTable } from "../../lib/schema-v2";
 import { eq, desc, sql, and, gte } from "drizzle-orm";
 
@@ -18,13 +18,13 @@ router.post("/contacts/score", async (req, res): Promise<void> => {
 
   for (const contactId of parsed.data.contactIds) {
     try {
-      const [contact] = await db.select().from(contactsTable).where(eq(contactsTable.id, contactId)).limit(1);
+      const [contact] = await sharedDb.select().from(contactsTable).where(eq(contactsTable.id, contactId)).limit(1);
       if (!contact) { results.push({ contactId, score: 0, reason: "Contact not found" }); continue; }
 
-      const [intel] = await db.select().from(contactIntelligenceTable)
+      const [intel] = await sharedDb.select().from(contactIntelligenceTable)
         .where(eq(contactIntelligenceTable.contactId, contactId)).limit(1);
 
-      const commStats = await db.select({
+      const commStats = await sharedDb.select({
         channel: communicationLogTable.channel,
         count: sql<number>`COUNT(*)`,
         lastDate: sql<string>`MAX(logged_at)`,
@@ -38,7 +38,7 @@ router.post("/contacts/score", async (req, res): Promise<void> => {
         !latest || new Date(c.lastDate) > new Date(latest) ? c.lastDate : latest, "" as string);
 
       const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-      const recentComms = await db.select({ count: sql<number>`COUNT(*)` })
+      const recentComms = await sharedDb.select({ count: sql<number>`COUNT(*)` })
         .from(communicationLogTable)
         .where(and(eq(communicationLogTable.contactId, contactId), gte(communicationLogTable.loggedAt, weekAgo)));
       const recentCount = Number(recentComms[0]?.count || 0);
@@ -100,19 +100,19 @@ router.post("/contacts/score", async (req, res): Promise<void> => {
 
       score = Math.min(score, 100);
 
-      const [existing] = await db.select({ id: contactIntelligenceTable.id })
+      const [existing] = await sharedDb.select({ id: contactIntelligenceTable.id })
         .from(contactIntelligenceTable)
         .where(eq(contactIntelligenceTable.contactId, contactId)).limit(1);
 
       if (existing) {
-        await db.update(contactIntelligenceTable).set({
+        await sharedDb.update(contactIntelligenceTable).set({
           aiScore: String(score),
           aiScoreReason: reasons.join("\n"),
           lastAiScan: new Date(),
           updatedAt: new Date(),
         }).where(eq(contactIntelligenceTable.contactId, contactId));
       } else {
-        await db.insert(contactIntelligenceTable).values({
+        await sharedDb.insert(contactIntelligenceTable).values({
           contactId,
           aiScore: String(score),
           aiScoreReason: reasons.join("\n"),

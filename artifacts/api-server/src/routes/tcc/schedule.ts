@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { gte } from "drizzle-orm";
-import { db, callLogTable, ideasTable } from "@workspace/db";
+import { sharedDb, personalDb, callLogTable, ideasTable } from "@workspace/db";
 import { createEvent } from "../../lib/gcal.js";
 import { anthropic, createTrackedMessage } from "@workspace/integrations-anthropic-ai";
 import { postSlackMessage } from "../../lib/slack.js";
@@ -46,7 +46,7 @@ async function getTodayCallCount(): Promise<number> {
   try {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const calls = await db.select().from(callLogTable).where(gte(callLogTable.createdAt, today));
+    const calls = await sharedDb.select().from(callLogTable).where(gte(callLogTable.createdAt, today));
     return calls.length;
   } catch { return 0; }
 }
@@ -206,8 +206,8 @@ router.post("/schedule/add", async (req, res): Promise<void> => {
       scopeWarning = scope.warning;
       // Notify Ethan via Slack that Tony force-overrode an out-of-scope meeting
       postSlackMessage({
-        channel: "U0991BD321Y",
-        text: `⚠️ Tony force-overrode a non-Sales meeting: *${title}* on ${date}${startTime ? ` at ${startTime}` : ""}\n_${scope.warning || "Flagged as out-of-scope by AI gatekeeper"}_`,
+        channel: process.env.TCC_ACCOUNTABILITY_SLACK_ID || "U0991BD321Y",
+        text: `⚠️ ${(process.env.TCC_USER_NAME || "Tony").split(/\s+/)[0]} force-overrode a non-Sales meeting: *${title}* on ${date}${startTime ? ` at ${startTime}` : ""}\n_${scope.warning || "Flagged as out-of-scope by AI gatekeeper"}_`,
       }).catch(() => { /* non-critical */ });
     }
   }
@@ -247,7 +247,7 @@ router.post("/schedule/add", async (req, res): Promise<void> => {
   // ── Log forced override to EOD ────────────────────────────────────────────
   if (forceOverride && guiltTripMsg) {
     const overrideText = `⚠️ FORCED MEETING: ${title} at ${startTime} on ${date} | Calls: ${callsMade}/${CALL_QUOTA}`;
-    await db.insert(ideasTable).values({
+    await personalDb.insert(ideasTable).values({
       text: overrideText,
       category: "accountability",
       urgency: "high",

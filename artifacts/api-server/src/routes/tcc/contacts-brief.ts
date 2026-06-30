@@ -4,7 +4,7 @@ import { anthropic, createTrackedMessage } from "@workspace/integrations-anthrop
 import { isAgentRuntimeEnabled } from "../../agents/flags.js";
 import { runAgent } from "../../agents/runtime.js";
 import { substituteContactTokens } from "../../lib/contact-tokens.js";
-import { db, contactsTable, meetingHistoryTable } from "@workspace/db";
+import { sharedDb, contactsTable, meetingHistoryTable } from "@workspace/db";
 import { contactIntelligenceTable, communicationLogTable, contactBriefsTable } from "../../lib/schema-v2";
 import { eq, desc, ilike } from "drizzle-orm";
 
@@ -21,13 +21,13 @@ router.post("/contacts/brief", async (req, res): Promise<void> => {
   const { contactId } = parsed.data;
 
   try {
-    const [contact] = await db.select().from(contactsTable).where(eq(contactsTable.id, contactId)).limit(1);
+    const [contact] = await sharedDb.select().from(contactsTable).where(eq(contactsTable.id, contactId)).limit(1);
     if (!contact) { res.status(404).json({ error: "Contact not found" }); return; }
 
-    const [intel] = await db.select().from(contactIntelligenceTable)
+    const [intel] = await sharedDb.select().from(contactIntelligenceTable)
       .where(eq(contactIntelligenceTable.contactId, contactId)).limit(1);
 
-    const recentComms = await db.select().from(communicationLogTable)
+    const recentComms = await sharedDb.select().from(communicationLogTable)
       .where(eq(communicationLogTable.contactId, contactId))
       .orderBy(desc(communicationLogTable.loggedAt))
       .limit(10);
@@ -35,7 +35,7 @@ router.post("/contacts/brief", async (req, res): Promise<void> => {
     // meeting_history is keyed by contact_name (text), not contact_id —
     // ILIKE match on the contact's canonical name. See lib/db/src/schema/tcc.ts.
     const recentMeetings = contact.name
-      ? await db.select().from(meetingHistoryTable)
+      ? await sharedDb.select().from(meetingHistoryTable)
           .where(ilike(meetingHistoryTable.contactName, `%${contact.name.trim()}%`))
           .orderBy(desc(meetingHistoryTable.date))
           .limit(5)
@@ -150,7 +150,7 @@ ${context}`;
     // brief mentions the contact by name throughout).
     briefText = substituteContactTokens(briefText, { name: contact.name });
 
-    await db.insert(contactBriefsTable).values({
+    await sharedDb.insert(contactBriefsTable).values({
       contactId,
       contactName: contact.name,
       briefText,
@@ -186,7 +186,7 @@ ${context}`;
 });
 
 router.get("/contacts/:contactId/brief", async (req, res): Promise<void> => {
-  const [brief] = await db.select().from(contactBriefsTable)
+  const [brief] = await sharedDb.select().from(contactBriefsTable)
     .where(eq(contactBriefsTable.contactId, req.params.contactId))
     .orderBy(desc(contactBriefsTable.generatedAt))
     .limit(1);
@@ -218,20 +218,20 @@ router.post("/contacts/brief/chat", async (req, res): Promise<void> => {
 
   try {
     // Re-fetch contact + comms so the AI sees current data, not a stale snapshot.
-    const [contact] = await db.select().from(contactsTable).where(eq(contactsTable.id, contactId)).limit(1);
+    const [contact] = await sharedDb.select().from(contactsTable).where(eq(contactsTable.id, contactId)).limit(1);
     if (!contact) { res.status(404).json({ error: "Contact not found" }); return; }
 
-    const [intel] = await db.select().from(contactIntelligenceTable)
+    const [intel] = await sharedDb.select().from(contactIntelligenceTable)
       .where(eq(contactIntelligenceTable.contactId, contactId)).limit(1);
 
-    const recentComms = await db.select().from(communicationLogTable)
+    const recentComms = await sharedDb.select().from(communicationLogTable)
       .where(eq(communicationLogTable.contactId, contactId))
       .orderBy(desc(communicationLogTable.loggedAt))
       .limit(10);
 
     // meeting_history rows match by contact name (no contact_id column).
     const recentMeetings = contact.name
-      ? await db.select().from(meetingHistoryTable)
+      ? await sharedDb.select().from(meetingHistoryTable)
           .where(ilike(meetingHistoryTable.contactName, `%${contact.name.trim()}%`))
           .orderBy(desc(meetingHistoryTable.date))
           .limit(5)

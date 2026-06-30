@@ -1,13 +1,13 @@
 // get_team_roster — orchestrator wrapper. Returns FlipIQ team_roles rows.
 
 import type { ToolHandler } from "../index.js";
-import { db } from "@workspace/db";
+import { sharedDb } from "@workspace/db";
 import { teamRolesTable } from "../../../lib/schema-v2.js";
 import { asc } from "drizzle-orm";
 
 const handler: ToolHandler = async () => {
   try {
-    const team = await db.select().from(teamRolesTable)
+    const team = await sharedDb.select().from(teamRolesTable)
       .orderBy(asc(teamRolesTable.position), asc(teamRolesTable.name));
     if (team.length === 0) return "No team roster found. The Business Brain has no team members yet.";
     const lines = ["## FlipIQ Team Roster\n"];

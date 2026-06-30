@@ -4,7 +4,7 @@
 // Only memory section Coach can write to on its OWN agent without a proposal.
 
 import type { ToolHandler } from "../index.js";
-import { db, agentMemoryEntriesTable } from "@workspace/db";
+import { personalDb, agentMemoryEntriesTable } from "@workspace/db";
 import { and, eq, sql } from "drizzle-orm";
 
 interface Input {
@@ -28,7 +28,7 @@ const handler: ToolHandler = async (input, ctx) => {
   const entry = `\n\n## ${stamp}${runRef} — ${agent}\n${note.trim()}\n`;
 
   // Read existing log
-  const [existing] = await db.select().from(agentMemoryEntriesTable)
+  const [existing] = await personalDb.select().from(agentMemoryEntriesTable)
     .where(and(
       eq(agentMemoryEntriesTable.agent, "coach"),
       eq(agentMemoryEntriesTable.kind, "memory"),
@@ -36,7 +36,7 @@ const handler: ToolHandler = async (input, ctx) => {
     )).limit(1);
 
   if (existing) {
-    await db.update(agentMemoryEntriesTable).set({
+    await personalDb.update(agentMemoryEntriesTable).set({
       content: existing.content + entry,
       version: sql`${agentMemoryEntriesTable.version} + 1`,
       updatedAt: new Date(),
@@ -44,7 +44,7 @@ const handler: ToolHandler = async (input, ctx) => {
     }).where(eq(agentMemoryEntriesTable.id, existing.id));
   } else {
     // First write — initialize the section.
-    await db.insert(agentMemoryEntriesTable).values({
+    await personalDb.insert(agentMemoryEntriesTable).values({
       agent: "coach",
       kind: "memory",
       sectionName: "evaluation-log",

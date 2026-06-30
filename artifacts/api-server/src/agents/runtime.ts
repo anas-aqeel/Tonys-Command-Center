@@ -17,7 +17,7 @@
 // Every tool wrapper has the same shape (see ./tools/index.ts ToolHandler).
 
 import { createTrackedMessage } from "@workspace/integrations-anthropic-ai";
-import { db, agentRunsTable } from "@workspace/db";
+import { personalDb, agentRunsTable } from "@workspace/db";
 import { buildPrompt } from "./prompt-builder.js";
 import { resolveTools, type ToolHandler, type AnthropicToolSpec, type AgentContext } from "./tools/index.js";
 
@@ -292,7 +292,7 @@ async function logRun(args: LogRunArgs): Promise<string> {
   try {
     const u = args.cumUsage;
     const cost = await computeRunCost(args.model, u);
-    const inserted = await db.insert(agentRunsTable).values({
+    const inserted = await personalDb.insert(agentRunsTable).values({
       agent: args.agent,
       skill: args.skillName,
       caller: args.caller || null,

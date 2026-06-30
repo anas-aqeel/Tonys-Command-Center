@@ -1,12 +1,14 @@
 // query_database — orchestrator wrapper. Read-only SELECT against PostgreSQL.
 // Preserves the keyword-blocklist guard from claude.ts.
+// Supports `target` param: "shared" (business/contacts DB) or "personal" (user's DB).
 
 import type { ToolHandler } from "../index.js";
-import { db } from "@workspace/db";
+import { sharedDb, personalDb } from "@workspace/db";
 import { sql } from "drizzle-orm";
 
 const handler: ToolHandler = async (input) => {
-  const rawSql = String(input.sql).trim();
+  const rawSql = String(input.sql || input.query).trim();
+  const target = String(input.target || "personal").toLowerCase();
   const upperSql = rawSql.toUpperCase();
   const blocked = ["INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "TRUNCATE", "CREATE", "GRANT", "REVOKE"];
   if (blocked.some(k => upperSql.includes(k))) {
@@ -15,6 +17,9 @@ const handler: ToolHandler = async (input) => {
   if (!upperSql.startsWith("SELECT")) {
     return `Only SELECT queries are allowed.`;
   }
+
+  const db = target === "shared" ? sharedDb : personalDb;
+
   try {
     const result = await db.execute(sql.raw(rawSql));
     const rows = result.rows as Record<string, unknown>[];

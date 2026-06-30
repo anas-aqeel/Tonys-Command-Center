@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { agentMailRequest } from "../../lib/agentmail";
 import { anthropic, createTrackedMessage } from "@workspace/integrations-anthropic-ai";
-import { db, callLogTable, taskCompletionsTable } from "@workspace/db";
+import { sharedDb, personalDb, callLogTable, taskCompletionsTable } from "@workspace/db";
 import { isAgentRuntimeEnabled } from "../../agents/flags.js";
 import { runAgent } from "../../agents/runtime.js";
 import { sql } from "drizzle-orm";
@@ -160,7 +160,7 @@ For confidence: high = can clearly read text, medium = partially legible, low = 
     for (const call of parsed.calls ?? []) {
       if (call.checked && call.name) {
         try {
-          await db.insert(callLogTable).values({
+          await sharedDb.insert(callLogTable).values({
             contactName: call.name,
             type: "outbound",
             notes: call.outcome
@@ -179,7 +179,7 @@ For confidence: high = can clearly read text, medium = partially legible, low = 
     for (const t of parsed.top3 ?? []) {
       if (t.checked) {
         try {
-          await db.execute(
+          await personalDb.execute(
             sql`INSERT INTO task_completions (task_id, task_text, completed_at)
                 VALUES (${`scanned-top3-row${t.row}-${today}`}, ${`Top 3 #${t.row} — completed via scanned sheet${t.note ? `: ${t.note}` : ""}`}, NOW())
                 ON CONFLICT DO NOTHING`

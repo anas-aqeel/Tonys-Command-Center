@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, phoneLogTable, contactsTable } from "@workspace/db";
+import { sharedDb, phoneLogTable, contactsTable } from "@workspace/db";
 import { eq, desc, gte, and } from "drizzle-orm";
 import { z } from "zod/v4";
 import { communicationLogTable, contactIntelligenceTable } from "../../lib/schema-v2";
@@ -51,7 +51,7 @@ async function handlePhoneLogWebhook(
   const normalizedIncoming = normalizePhone(phone_number);
 
   // Auto-match to contact via indexed phone_normalized column
-  let [match] = await db
+  let [match] = await sharedDb
     .select({ id: contactsTable.id, name: contactsTable.name })
     .from(contactsTable)
     .where(eq(contactsTable.phoneNormalized, normalizedIncoming))
@@ -60,17 +60,17 @@ async function handlePhoneLogWebhook(
   // FlipIQ auto-contact creation: if tagged and no match, create a new contact + intelligence row
   if (flipiq_tagged && !match) {
     const autoName = `Unknown — (${phone_number})`;
-    const [newContact] = await db
+    const [newContact] = await sharedDb
       .insert(contactsTable)
       .values({ name: autoName, phone: phone_number, source: "phone", status: "New" })
       .returning({ id: contactsTable.id, name: contactsTable.name });
     if (newContact) {
       match = newContact;
-      await db.insert(contactIntelligenceTable).values({ contactId: newContact.id }).onConflictDoNothing();
+      await sharedDb.insert(contactIntelligenceTable).values({ contactId: newContact.id }).onConflictDoNothing();
     }
   }
 
-  const [entry] = await db
+  const [entry] = await sharedDb
     .insert(phoneLogTable)
     .values({
       phoneNumber: phone_number,
@@ -86,7 +86,7 @@ async function handlePhoneLogWebhook(
 
   // Update contact's lastContactDate if matched
   if (match) {
-    await db
+    await sharedDb
       .update(contactsTable)
       .set({ lastContactDate: new Date().toISOString().split("T")[0], updatedAt: new Date() })
       .where(eq(contactsTable.id, match.id))
@@ -103,7 +103,7 @@ async function handlePhoneLogWebhook(
   const channel = channelMap[type] || type;
   const direction = type.endsWith("_outbound") ? "outbound" : "inbound";
 
-  await db.insert(communicationLogTable).values({
+  await sharedDb.insert(communicationLogTable).values({
     contactId: match?.id ?? undefined,
     contactName: match?.name ?? phone_number,
     channel,
@@ -135,7 +135,7 @@ router.get("/phone-log", async (req, res): Promise<void> => {
   const contactId = req.query["contactId"] as string | undefined;
   const since = req.query["since"] as string | undefined;
 
-  let query = db.select().from(phoneLogTable).$dynamic();
+  let query = sharedDb.select().from(phoneLogTable).$dynamic();
 
   if (contactId && since) {
     query = query.where(and(eq(phoneLogTable.contactId, contactId), gte(phoneLogTable.loggedAt, new Date(since))));
@@ -154,7 +154,7 @@ router.get("/phone-log/today", async (req, res): Promise<void> => {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  const logs = await db
+  const logs = await sharedDb
     .select()
     .from(phoneLogTable)
     .where(gte(phoneLogTable.loggedAt, today))

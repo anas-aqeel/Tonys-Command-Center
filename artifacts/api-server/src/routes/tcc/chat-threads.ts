@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import { z } from "zod";
 import { eq, desc, and, sql, asc } from "drizzle-orm";
 import { anthropic, createTrackedMessage, createTrackedStream } from "@workspace/integrations-anthropic-ai";
-import { db, systemInstructionsTable, contactsTable } from "@workspace/db";
+import { sharedDb, personalDb, systemInstructionsTable, contactsTable } from "@workspace/db";
 import { chatThreadsTable, chatMessagesTable, communicationLogTable, contactIntelligenceTable, companyGoalsTable, teamRolesTable } from "../../lib/schema-v2";
 import { createLinearIssue, getLinearIssues, getLinearMembers } from "../../lib/linear";
 import { postSlackMessage, getSlackChannelHistory, listSlackChannels, searchSlack } from "../../lib/slack";
@@ -41,7 +41,7 @@ const TOOLS: Parameters<typeof anthropic.messages.create>[0]["tools"] = [
   },
   {
     name: "send_email",
-    description: "Send an email on Tony's behalf via Gmail from tony@flipiq.com.",
+    description: `Send an email on ${process.env.TCC_USER_NAME || "Tony"}'s behalf via Gmail from ${process.env.TCC_USER_EMAIL || "tony@flipiq.com"}.`,
     input_schema: {
       type: "object" as const,
       properties: {
@@ -207,12 +207,12 @@ const TOOLS: Parameters<typeof anthropic.messages.create>[0]["tools"] = [
   },
   {
     name: "send_eod_report",
-    description: "Generate and send today's End of Day (EOD) report. Sends Tony's performance summary to tony@flipiq.com and Ethan's accountability brief to ethan@flipiq.com. Guards against double-sending.",
+    description: `Generate and send today's End of Day (EOD) report. Sends ${(process.env.TCC_USER_NAME || "Tony").split(/\s+/)[0]}'s performance summary to ${process.env.TCC_USER_EMAIL || "tony@flipiq.com"} and accountability brief to ${process.env.TCC_ACCOUNTABILITY_EMAIL || "ethan@flipiq.com"}. Guards against double-sending.`,
     input_schema: { type: "object" as const, properties: {}, required: [] },
   },
   {
     name: "get_all_tasks",
-    description: "Fetch ALL open Linear tasks/issues with status, priority, assignee, and due dates. Use this when Tony asks about Linear, tasks, issues, tickets, due dates, team progress, or what's overdue.",
+    description: "Fetch ALL open Linear tasks/issues with status, priority, assignee, and due dates. Use this when the user asks about Linear, tasks, issues, tickets, due dates, team progress, or what's overdue.",
     input_schema: { type: "object" as const, properties: {}, required: [] },
   },
   {
@@ -234,11 +234,12 @@ const TOOLS: Parameters<typeof anthropic.messages.create>[0]["tools"] = [
   },
   {
     name: "query_database",
-    description: "Execute a read-only SQL SELECT query against the database. Use for custom data lookups. Only SELECT queries allowed.",
+    description: "Execute a read-only SQL SELECT query. Use target='shared' for business/contacts tables, target='personal' for user data (checkins, ideas, chat, agent config).",
     input_schema: {
       type: "object" as const,
       properties: {
         query: { type: "string", description: "SQL SELECT query" },
+        target: { type: "string", enum: ["shared", "personal"], description: "Which database to query: 'shared' for business/contacts, 'personal' for user data. Defaults to 'personal'." },
       },
       required: ["query"],
     },
@@ -336,18 +337,18 @@ async function executeTool(name: string, input: Record<string, unknown>): Promis
       try {
         let contact;
         if (input.contactId) {
-          [contact] = await db.select().from(contactsTable).where(eq(contactsTable.id, String(input.contactId))).limit(1);
+          [contact] = await sharedDb.select().from(contactsTable).where(eq(contactsTable.id, String(input.contactId))).limit(1);
         } else if (input.name) {
-          [contact] = await db.select().from(contactsTable)
+          [contact] = await sharedDb.select().from(contactsTable)
             .where(sql`LOWER(name) LIKE LOWER(${"%" + String(input.name) + "%"})`)
             .limit(1);
         }
         if (!contact) return `No contact found for "${input.name || input.contactId}".`;
 
-        const [intel] = await db.select().from(contactIntelligenceTable)
+        const [intel] = await sharedDb.select().from(contactIntelligenceTable)
           .where(eq(contactIntelligenceTable.contactId, contact.id)).limit(1);
 
-        const recentComms = await db.select().from(communicationLogTable)
+        const recentComms = await sharedDb.select().from(communicationLogTable)
           .where(eq(communicationLogTable.contactId, contact.id))
           .orderBy(desc(communicationLogTable.loggedAt)).limit(5);
 
@@ -378,14 +379,14 @@ async function executeTool(name: string, input: Record<string, unknown>): Promis
       const stage = String(input.stage);
       if (!VALID_STAGES.includes(stage)) return `Invalid stage "${stage}". Valid: ${VALID_STAGES.join(", ")}`;
       try {
-        await db.update(contactIntelligenceTable)
+        await sharedDb.update(contactIntelligenceTable)
           .set({ stage, updatedAt: new Date() })
           .where(eq(contactIntelligenceTable.contactId, String(input.contactId)));
         return `Contact stage updated to "${stage}"`;
       } catch { return `Stage update failed — contact_intelligence row may not exist yet.`; }
     }
     case "get_email_brain": {
-      const [row] = await db.select().from(systemInstructionsTable).where(eq(systemInstructionsTable.section, "email_brain"));
+      const [row] = await personalDb.select().from(systemInstructionsTable).where(eq(systemInstructionsTable.section, "email_brain"));
       return row?.content ? `Email Brain:\n${row.content}` : "No email brain yet.";
     }
     case "list_recent_emails": {
@@ -443,7 +444,7 @@ async function executeTool(name: string, input: Record<string, unknown>): Promis
       const result = await sendAutoEod();
       if (result.alreadySent) return `✓ EOD report already sent today — no duplicate sent.`;
       if (!result.ok) return `✗ EOD report failed to generate.`;
-      return `✓ EOD report sent!\n- Calls: ${result.callsMade ?? 0}\n- Demos: ${result.demosBooked ?? 0}\n- Tasks: ${result.tasksCompleted ?? 0}\n\nTony → tony@flipiq.com\nEthan → ethan@flipiq.com`;
+      return `✓ EOD report sent!\n- Calls: ${result.callsMade ?? 0}\n- Demos: ${result.demosBooked ?? 0}\n- Tasks: ${result.tasksCompleted ?? 0}\n\n${(process.env.TCC_USER_NAME || "Tony").split(/\s+/)[0]} → ${process.env.TCC_USER_EMAIL || "tony@flipiq.com"}\n${(process.env.TCC_ACCOUNTABILITY_EMAIL || "ethan@flipiq.com").split("@")[0]} → ${process.env.TCC_ACCOUNTABILITY_EMAIL || "ethan@flipiq.com"}`;
     }
     case "get_all_tasks": {
       try {
@@ -491,10 +492,12 @@ async function executeTool(name: string, input: Record<string, unknown>): Promis
     }
     case "query_database": {
       const q = String(input.query).trim();
+      const target = String(input.target || "personal").toLowerCase();
       if (!/^SELECT/i.test(q)) return "Only SELECT queries are allowed.";
       if (/\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE)\b/i.test(q)) return "Only SELECT queries are allowed.";
       try {
-        const result = await db.execute(sql.raw(q));
+        const queryDb = target === "shared" ? sharedDb : personalDb;
+        const result = await queryDb.execute(sql.raw(q));
         const rows = Array.isArray(result) ? result : (result as any).rows || [];
         if (rows.length === 0) return "Query returned 0 rows.";
         return rows.slice(0, 50).map((r: any) => JSON.stringify(r)).join("\n");
@@ -506,7 +509,7 @@ async function executeTool(name: string, input: Record<string, unknown>): Promis
       try {
         const term = `%${String(input.query)}%`;
         const lim = Math.min(Number(input.limit) || 10, 25);
-        const results = await db.select().from(contactsTable)
+        const results = await sharedDb.select().from(contactsTable)
           .where(sql`LOWER(name) LIKE LOWER(${term}) OR LOWER(company) LIKE LOWER(${term})`)
           .limit(lim);
         if (!results.length) return `No contacts matching "${input.query}".`;
@@ -520,15 +523,15 @@ async function executeTool(name: string, input: Record<string, unknown>): Promis
         const lim = Math.min(Number(input.limit) || 20, 50);
         let results;
         if (input.contact_name) {
-          const [contact] = await db.select().from(contactsTable)
+          const [contact] = await sharedDb.select().from(contactsTable)
             .where(sql`LOWER(name) LIKE LOWER(${`%${String(input.contact_name)}%`})`)
             .limit(1);
           if (!contact) return `No contact found matching "${input.contact_name}".`;
-          results = await db.select().from(communicationLogTable)
+          results = await sharedDb.select().from(communicationLogTable)
             .where(eq(communicationLogTable.contactId, contact.id))
             .orderBy(desc(communicationLogTable.loggedAt)).limit(lim);
         } else {
-          results = await db.select().from(communicationLogTable)
+          results = await sharedDb.select().from(communicationLogTable)
             .orderBy(desc(communicationLogTable.loggedAt)).limit(lim);
         }
         if (!results.length) return "No communication log entries found.";
@@ -543,7 +546,7 @@ async function executeTool(name: string, input: Record<string, unknown>): Promis
 }
 
 async function buildSystemPrompt(contextType?: string, contextId?: string): Promise<string> {
-  const [brainRow] = await db.select().from(systemInstructionsTable).where(eq(systemInstructionsTable.section, "email_brain"));
+  const [brainRow] = await personalDb.select().from(systemInstructionsTable).where(eq(systemInstructionsTable.section, "email_brain"));
   const brainSection = brainRow?.content ? `\n\nEMAIL BRAIN:\n${brainRow.content}` : "";
 
   // Load live 411 goals and team roster for context injection
@@ -551,11 +554,11 @@ async function buildSystemPrompt(contextType?: string, contextId?: string): Prom
   let teamSection = "";
   try {
     const [activeGoals, team] = await Promise.all([
-      db.select().from(companyGoalsTable)
+      sharedDb.select().from(companyGoalsTable)
         .where(eq(companyGoalsTable.status, "active"))
         .orderBy(asc(companyGoalsTable.position))
         .limit(25),
-      db.select().from(teamRolesTable)
+      sharedDb.select().from(teamRolesTable)
         .orderBy(asc(teamRolesTable.position))
         .limit(20),
     ]);
@@ -585,41 +588,44 @@ async function buildSystemPrompt(contextType?: string, contextId?: string): Prom
     }
   } catch { /* non-blocking */ }
 
+  const userName = process.env.TCC_USER_NAME || "Tony Diaz";
+  const userFirstName = userName.split(/\s+/)[0];
+  const userRole = process.env.TCC_USER_ROLE || "CEO";
+
   let contextSection = "";
   if (contextType === "contact" && contextId) {
-    const [contact] = await db.select().from(contactsTable).where(eq(contactsTable.id, contextId)).limit(1);
+    const [contact] = await sharedDb.select().from(contactsTable).where(eq(contactsTable.id, contextId)).limit(1);
     if (contact) {
-      contextSection = `\n\nCURRENT CONTEXT -- Contact: ${contact.name}\nCompany: ${contact.company || "N/A"}\nStatus: ${contact.status}\nPhone: ${contact.phone || "N/A"}\nEmail: ${contact.email || "N/A"}\nNext Step: ${contact.nextStep || "None"}\n\nYou are helping Tony with this contact. Use research_contact for more details.`;
+      contextSection = `\n\nCURRENT CONTEXT -- Contact: ${contact.name}\nCompany: ${contact.company || "N/A"}\nStatus: ${contact.status}\nPhone: ${contact.phone || "N/A"}\nEmail: ${contact.email || "N/A"}\nNext Step: ${contact.nextStep || "None"}\n\nYou are helping ${userFirstName} with this contact. Use research_contact for more details.`;
     }
   } else if (contextType === "email") {
-    contextSection = `\n\nCURRENT CONTEXT -- Email. Tony opened chat from an email. Help him reply or take action. Use compose_email to draft (Tony sends via Gmail).`;
+    contextSection = `\n\nCURRENT CONTEXT -- Email. ${userFirstName} opened chat from an email. Help him reply or take action. Use compose_email to draft (${userFirstName} sends via Gmail).`;
   } else if (contextType === "schedule" || contextType === "calendar") {
     contextSection = `\n\nCURRENT CONTEXT -- Schedule. Help with meetings, time blocks, calendar.`;
   } else if (contextType === "task") {
-    contextSection = `\n\nCURRENT CONTEXT -- Task. Help Tony work through it or break it down.`;
+    contextSection = `\n\nCURRENT CONTEXT -- Task. Help ${userFirstName} work through it or break it down.`;
   }
 
-  return `You are Tony Diaz's Command Center AI -- his personal operating system for FlipIQ.
+  return `You are ${userName}'s Command Center AI -- his personal operating system for FlipIQ.
 
-ABOUT TONY:
-- CEO of FlipIQ, real estate wholesale platform
-- Has ADHD -- be clear, direct, action-oriented. Keep responses scannable.
+ABOUT ${userFirstName.toUpperCase()}:
+- ${userRole} of FlipIQ, real estate wholesale platform
+- Be clear, direct, action-oriented. Keep responses scannable.
 - North Star: Every Acquisition Associate closes 2 deals/month
 - Revenue: $50K break-even → $100K Phase 1 → $250K Scale
-- Priority: (1) Sales calls, (2) Ramy support, (3) everything else
 
-TONY'S RULES:
+RULES:
 - "Today, I will follow the plan I wrote when I was clear."
 - Morning block = Sales calls ONLY. No distractions.
 - Ideas get parked and evaluated against North Star + 90-day plan.
 
 SCOPE GATEKEEPER:
-- If Tony drifts into non-sales activities during prime hours, redirect him.
-- For compose_email: draft for review, Tony sends via Gmail himself.
-- For schedule_meeting: only sales or Ramy support meetings allowed.
+- If ${userFirstName} drifts into non-sales activities during prime hours, redirect him.
+- For compose_email: draft for review, ${userFirstName} sends via Gmail himself.
+- For schedule_meeting: only sales or support meetings allowed.
 
 LINEAR (project management tool — NOT a Slack channel):
-- When Tony asks about "Linear", "tasks", "issues", "tickets", "due dates", "team progress", or "what's overdue" → use get_all_tasks to fetch all Linear issues
+- When ${userFirstName} asks about "Linear", "tasks", "issues", "tickets", "due dates", "team progress", or "what's overdue" → use get_all_tasks to fetch all Linear issues
 - To assign issues, call get_linear_members first to get user IDs, then create_linear_issue
 - NEVER search Slack for Linear data — Linear is a separate tool, use get_all_tasks
 
@@ -627,7 +633,7 @@ KNOWN RESOURCES (always use these direct links — do not search Drive for these
 - FlipIQ Business Master Sheet: https://docs.google.com/spreadsheets/d/1VXx88LTbuoTrnEssB50kBelGPX_nCVcclVrEAxJGEqE
 - FlipIQ Master Contact List: https://docs.google.com/spreadsheets/d/1VXx88LTbuoTrnEssB50kBelGPX_nCVcclVrEAxJGEqE
 
-BE BRIEF. Tony doesn't like to read. Bullet points, not paragraphs.${brainSection}${goalsSection}${teamSection}${contextSection}`;
+BE BRIEF. ${userFirstName} doesn't like to read. Bullet points, not paragraphs.${brainSection}${goalsSection}${teamSection}${contextSection}`;
 }
 
 async function autoTitle(threadId: string, firstMessage: string): Promise<void> {
@@ -639,13 +645,13 @@ async function autoTitle(threadId: string, firstMessage: string): Promise<void> 
     });
     const titleBlock = response.content.find(b => b.type === "text");
     if (titleBlock?.type === "text" && titleBlock.text) {
-      await db.update(chatThreadsTable).set({ title: titleBlock.text.replace(/"/g, "").trim() }).where(eq(chatThreadsTable.id, threadId));
+      await personalDb.update(chatThreadsTable).set({ title: titleBlock.text.replace(/"/g, "").trim() }).where(eq(chatThreadsTable.id, threadId));
     }
   } catch { /* title is optional */ }
 }
 
 router.get("/chat/threads", async (_req, res): Promise<void> => {
-  const threads = await db.select().from(chatThreadsTable)
+  const threads = await personalDb.select().from(chatThreadsTable)
     .orderBy(
       desc(chatThreadsTable.pinned),
       desc(chatThreadsTable.pinnedAt),
@@ -666,7 +672,7 @@ router.post("/chat/threads", async (req, res): Promise<void> => {
   const parsed = CreateThreadBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
-  const [thread] = await db.insert(chatThreadsTable).values({
+  const [thread] = await personalDb.insert(chatThreadsTable).values({
     contextType: parsed.data.contextType,
     contextId: parsed.data.contextId || undefined,
     title: parsed.data.title || (parsed.data.contextLabel ? `Re: ${parsed.data.contextLabel}` : undefined),
@@ -676,8 +682,8 @@ router.post("/chat/threads", async (req, res): Promise<void> => {
 });
 
 router.delete("/chat/threads/:threadId", async (req, res): Promise<void> => {
-  await db.delete(chatMessagesTable).where(eq(chatMessagesTable.threadId, req.params.threadId));
-  await db.delete(chatThreadsTable).where(eq(chatThreadsTable.id, req.params.threadId));
+  await personalDb.delete(chatMessagesTable).where(eq(chatMessagesTable.threadId, req.params.threadId));
+  await personalDb.delete(chatThreadsTable).where(eq(chatThreadsTable.id, req.params.threadId));
   res.json({ ok: true });
 });
 
@@ -697,7 +703,7 @@ router.patch("/chat/threads/:threadId", async (req, res): Promise<void> => {
     updates.pinnedAt = parsed.data.pinned ? new Date() : null;
   }
 
-  const [updated] = await db.update(chatThreadsTable)
+  const [updated] = await personalDb.update(chatThreadsTable)
     .set(updates)
     .where(eq(chatThreadsTable.id, req.params.threadId))
     .returning();
@@ -707,7 +713,7 @@ router.patch("/chat/threads/:threadId", async (req, res): Promise<void> => {
 });
 
 router.get("/chat/threads/:threadId/messages", async (req, res): Promise<void> => {
-  const messages = await db.select().from(chatMessagesTable)
+  const messages = await personalDb.select().from(chatMessagesTable)
     .where(eq(chatMessagesTable.threadId, req.params.threadId))
     .orderBy(chatMessagesTable.createdAt);
   res.json(messages);
@@ -725,18 +731,18 @@ router.post("/chat/threads/:threadId/messages", async (req, res): Promise<void> 
   const { threadId } = req.params;
   const { content, mentionedAgent } = parsed.data;
 
-  const [thread] = await db.select().from(chatThreadsTable).where(eq(chatThreadsTable.id, threadId)).limit(1);
+  const [thread] = await personalDb.select().from(chatThreadsTable).where(eq(chatThreadsTable.id, threadId)).limit(1);
   if (!thread) { res.status(404).json({ error: "Thread not found" }); return; }
 
-  await db.insert(chatMessagesTable).values({ threadId, role: "user", content });
+  await personalDb.insert(chatMessagesTable).values({ threadId, role: "user", content });
 
-  const userMessages = await db.select({ id: chatMessagesTable.id }).from(chatMessagesTable)
+  const userMessages = await personalDb.select({ id: chatMessagesTable.id }).from(chatMessagesTable)
     .where(and(eq(chatMessagesTable.threadId, threadId), eq(chatMessagesTable.role, "user")));
   if (userMessages.length <= 1 && !thread.title) {
     autoTitle(threadId, content);
   }
 
-  const history = await db.select().from(chatMessagesTable)
+  const history = await personalDb.select().from(chatMessagesTable)
     .where(eq(chatMessagesTable.threadId, threadId))
     .orderBy(chatMessagesTable.createdAt);
 
@@ -855,14 +861,14 @@ router.post("/chat/threads/:threadId/messages", async (req, res): Promise<void> 
     // Stream usage is logged per-turn by createTrackedStream's onFinish callback.
     void streamStartTime;
 
-    await db.insert(chatMessagesTable).values({
+    await personalDb.insert(chatMessagesTable).values({
       threadId,
       role: "assistant",
       content: fullResponse,
       toolCalls: toolResults.length > 0 ? toolResults : undefined,
     });
 
-    await db.update(chatThreadsTable).set({ updatedAt: new Date() }).where(eq(chatThreadsTable.id, threadId));
+    await personalDb.update(chatThreadsTable).set({ updatedAt: new Date() }).where(eq(chatThreadsTable.id, threadId));
 
     res.write(`data: ${JSON.stringify({ type: "done", toolResults })}\n\n`);
     res.end();

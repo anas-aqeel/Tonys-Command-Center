@@ -244,7 +244,7 @@ export function EmailCompose({
           <div style={{ textAlign: "center", padding: "40px 0" }}>
             <div style={{ fontSize: 32, marginBottom: 12 }}>&#10003;</div>
             <div style={{ fontFamily: FS, fontSize: 20, color: C.grn }}>Email Sent</div>
-            <div style={{ fontSize: 13, color: C.mut, marginTop: 6 }}>Sent from tony@flipiq.com</div>
+            <div style={{ fontSize: 13, color: C.mut, marginTop: 6 }}>Sent from {import.meta.env.VITE_USER_EMAIL || "tony@flipiq.com"}</div>
           </div>
         ) : (
           <>
@@ -342,7 +342,7 @@ export function EmailCompose({
             </div>
 
             <div style={{ fontSize: 10, color: C.mut, marginTop: 8, textAlign: "center" }}>
-              Sends from tony@flipiq.com · signature appended automatically
+              Sends from {import.meta.env.VITE_USER_EMAIL || "tony@flipiq.com"} · signature appended automatically
             </div>
           </>
         )}

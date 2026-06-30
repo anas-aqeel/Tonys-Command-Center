@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { getGmail } from "../../lib/google-auth";
-import { db, dailyBriefsTable } from "@workspace/db";
+import { personalDb, sharedDb, dailyBriefsTable } from "@workspace/db";
 import { communicationLogTable, contactsTable } from "../../lib/schema-v2";
 import { eq } from "drizzle-orm";
 import { sql } from "drizzle-orm";
@@ -14,7 +14,7 @@ const router: IRouter = Router();
 // Shared triage system prompt — used by /emails/reclassify-new + /emails/reclassify
 // when AGENT_RUNTIME_EMAIL is OFF (legacy path). When ON, the runtime loads
 // the equivalent body from agent_memory_entries (skill='triage').
-const TRIAGE_SYSTEM_PROMPT = `You are Tony Diaz's email triage assistant for FlipIQ (real estate wholesaling).
+const TRIAGE_SYSTEM_PROMPT = `You are ${process.env.TCC_USER_NAME || "Tony Diaz"}'s email triage assistant for FlipIQ (real estate wholesaling).
 Classify each email into exactly 3 categories: "important", "fyi", or "promotions".
 Important: from @flipiq.com team, known contacts, or keywords: urgent, contract, payment, demo, equity, funding, deal.
 FYI: medical, receipts, real-person notifications, updates relevant but need no reply.
@@ -100,7 +100,7 @@ router.get("/emails/poll", async (req, res): Promise<void> => {
     const newEmails: { from: string; subject: string; snippet: string; messageId: string; threadId: string }[] = [];
 
     for (const msg of messages) {
-      const [existing] = await db.select({ id: communicationLogTable.id })
+      const [existing] = await sharedDb.select({ id: communicationLogTable.id })
         .from(communicationLogTable)
         .where(eq(communicationLogTable.gmailMessageId, msg.id!))
         .limit(1);
@@ -125,7 +125,7 @@ router.get("/emails/poll", async (req, res): Promise<void> => {
       let matchedContactName: string | undefined;
 
       try {
-        const [contact] = await db.select()
+        const [contact] = await sharedDb.select()
           .from(contactsTable)
           .where(sql`LOWER(${contactsTable.email}) = LOWER(${senderEmail})`)
           .limit(1);
@@ -135,7 +135,7 @@ router.get("/emails/poll", async (req, res): Promise<void> => {
         }
       } catch { /* no match */ }
 
-      await db.insert(communicationLogTable).values({
+      await sharedDb.insert(communicationLogTable).values({
         contactId: matchedContactId,
         contactName: matchedContactName || from,
         channel: "email_received",
@@ -219,7 +219,7 @@ router.post("/emails/reclassify-new", async (req, res): Promise<void> => {
 
     // Merge into existing cached brief
     const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
-    const [dbBrief] = await db.select().from(dailyBriefsTable).where(eq(dailyBriefsTable.date, today));
+    const [dbBrief] = await personalDb.select().from(dailyBriefsTable).where(eq(dailyBriefsTable.date, today));
 
     const existingImportant = (dbBrief?.emailsImportant as any[]) ?? [];
     const existingFyi = (dbBrief?.emailsFyi as any[]) ?? [];
@@ -242,7 +242,7 @@ router.post("/emails/reclassify-new", async (req, res): Promise<void> => {
     const mergedFyi = [...newFyi, ...existingFyi];
 
     if (dbBrief) {
-      await db.update(dailyBriefsTable).set({ emailsImportant: mergedImportant, emailsFyi: mergedFyi }).where(eq(dailyBriefsTable.date, today));
+      await personalDb.update(dailyBriefsTable).set({ emailsImportant: mergedImportant, emailsFyi: mergedFyi }).where(eq(dailyBriefsTable.date, today));
     }
 
     res.json({
@@ -342,7 +342,7 @@ router.post("/emails/reclassify", async (req, res): Promise<void> => {
 
     // ── Merge or replace in daily brief ──────────────────────────────────────
     const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
-    const [dbBrief] = await db.select().from(dailyBriefsTable).where(eq(dailyBriefsTable.date, today));
+    const [dbBrief] = await personalDb.select().from(dailyBriefsTable).where(eq(dailyBriefsTable.date, today));
 
     let resultImportant = newImportant;
     let resultFyi = newFyi;
@@ -359,7 +359,7 @@ router.post("/emails/reclassify", async (req, res): Promise<void> => {
     // For unread/last_24h/custom: replace lists outright
 
     if (dbBrief) {
-      await db.update(dailyBriefsTable)
+      await personalDb.update(dailyBriefsTable)
         .set({ emailsImportant: resultImportant, emailsFyi: resultFyi })
         .where(eq(dailyBriefsTable.date, today));
     }

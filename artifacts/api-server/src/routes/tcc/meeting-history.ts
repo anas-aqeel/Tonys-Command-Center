@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, meetingHistoryTable } from "@workspace/db";
+import { sharedDb, meetingHistoryTable } from "@workspace/db";
 import { eq, desc, ilike } from "drizzle-orm";
 import { createTrackedMessage } from "@workspace/integrations-anthropic-ai";
 
@@ -11,14 +11,14 @@ router.get("/meeting-history", async (req, res): Promise<void> => {
 
   let rows;
   if (contactName && contactName.trim()) {
-    rows = await db
+    rows = await sharedDb
       .select()
       .from(meetingHistoryTable)
       .where(ilike(meetingHistoryTable.contactName, `%${contactName.trim()}%`))
       .orderBy(desc(meetingHistoryTable.date))
       .limit(lim);
   } else {
-    rows = await db
+    rows = await sharedDb
       .select()
       .from(meetingHistoryTable)
       .orderBy(desc(meetingHistoryTable.date))
@@ -32,7 +32,7 @@ router.post("/meeting-history", async (req, res): Promise<void> => {
   const { date, contactName, summary, nextSteps, outcome } = req.body as Record<string, string>;
   if (!date) { res.status(400).json({ error: "date is required" }); return; }
 
-  const [row] = await db
+  const [row] = await sharedDb
     .insert(meetingHistoryTable)
     .values({ date, contactName: contactName ?? null, summary: summary ?? null, nextSteps: nextSteps ?? null, outcome: outcome ?? null })
     .returning();
@@ -41,7 +41,7 @@ router.post("/meeting-history", async (req, res): Promise<void> => {
 });
 
 router.delete("/meeting-history/:id", async (req, res): Promise<void> => {
-  await db.delete(meetingHistoryTable).where(eq(meetingHistoryTable.id, req.params.id));
+  await sharedDb.delete(meetingHistoryTable).where(eq(meetingHistoryTable.id, req.params.id));
   res.json({ ok: true });
 });
 
@@ -96,7 +96,7 @@ Return ONLY a JSON object with these fields (no markdown, no fences):
     summary = transcript.slice(0, 280) + (transcript.length > 280 ? "…" : "");
   }
 
-  const [row] = await db
+  const [row] = await sharedDb
     .insert(meetingHistoryTable)
     .values({
       date: meetingDate,

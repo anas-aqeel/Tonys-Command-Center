@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, contactsTable, contactNotesTable, callLogTable } from "@workspace/db";
+import { sharedDb, contactsTable, contactNotesTable, callLogTable } from "@workspace/db";
 import { communicationLogTable } from "../../lib/schema-v2";
 import { eq, ilike, or, and, sql, desc, inArray } from "drizzle-orm";
 import { anthropic, createTrackedMessage } from "@workspace/integrations-anthropic-ai";
@@ -55,7 +55,7 @@ router.get("/contacts", async (req, res): Promise<void> => {
     : conditions.length > 1 ? and(...conditions)
     : undefined;
 
-  const contacts = await db
+  const contacts = await sharedDb
     .select()
     .from(contactsTable)
     .where(where)
@@ -67,7 +67,7 @@ router.get("/contacts", async (req, res): Promise<void> => {
     .limit(lim)
     .offset(off);
 
-  const countResult = await db
+  const countResult = await sharedDb
     .select({ count: sql<number>`COUNT(*)` })
     .from(contactsTable)
     .where(where);
@@ -85,13 +85,13 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 router.get("/contacts/:id", async (req, res): Promise<void> => {
   const { id } = req.params;
   if (!UUID_RE.test(id)) { res.status(404).json({ error: "Not found" }); return; }
-  const [contact] = await db.select().from(contactsTable).where(eq(contactsTable.id, id)).limit(1);
+  const [contact] = await sharedDb.select().from(contactsTable).where(eq(contactsTable.id, id)).limit(1);
   if (!contact) { res.status(404).json({ error: "Not found" }); return; }
 
   const [notes, recentCalls, comms] = await Promise.all([
-    db.select().from(contactNotesTable).where(eq(contactNotesTable.contactId, id)).orderBy(desc(contactNotesTable.createdAt)).limit(50),
-    db.select().from(callLogTable).where(eq(callLogTable.contactId, id)).orderBy(desc(callLogTable.createdAt)).limit(20),
-    db.select().from(communicationLogTable).where(eq(communicationLogTable.contactId, id)).orderBy(desc(communicationLogTable.loggedAt)).limit(30),
+    sharedDb.select().from(contactNotesTable).where(eq(contactNotesTable.contactId, id)).orderBy(desc(contactNotesTable.createdAt)).limit(50),
+    sharedDb.select().from(callLogTable).where(eq(callLogTable.contactId, id)).orderBy(desc(callLogTable.createdAt)).limit(20),
+    sharedDb.select().from(communicationLogTable).where(eq(communicationLogTable.contactId, id)).orderBy(desc(communicationLogTable.loggedAt)).limit(30),
   ]);
 
   res.json({ ...contact, _notes: notes, _calls: recentCalls, _comms: comms });
@@ -104,7 +104,7 @@ router.post("/contacts", async (req, res): Promise<void> => {
     return;
   }
 
-  const [contact] = await db.insert(contactsTable).values({
+  const [contact] = await sharedDb.insert(contactsTable).values({
     name: String(body.name),
     company: body.company ? String(body.company) : undefined,
     status: body.status ? String(body.status) : "New",
@@ -136,7 +136,7 @@ router.patch("/contacts/:id", async (req, res): Promise<void> => {
   const { id } = req.params;
   const body = req.body as Record<string, unknown>;
 
-  const [current] = await db.select({ status: contactsTable.status, pipelineStage: contactsTable.pipelineStage })
+  const [current] = await sharedDb.select({ status: contactsTable.status, pipelineStage: contactsTable.pipelineStage })
     .from(contactsTable).where(eq(contactsTable.id, id)).limit(1);
   if (!current) { res.status(404).json({ error: "Not found" }); return; }
 
@@ -179,7 +179,7 @@ router.patch("/contacts/:id", async (req, res): Promise<void> => {
   }
   updateFields.updatedAt = new Date();
 
-  const [updated] = await db.update(contactsTable).set(updateFields).where(eq(contactsTable.id, id)).returning();
+  const [updated] = await sharedDb.update(contactsTable).set(updateFields).where(eq(contactsTable.id, id)).returning();
   if (!updated) { res.status(404).json({ error: "Not found" }); return; }
 
   const activityNotes: { contactId: string; text: string; kind: string }[] = [];
@@ -190,7 +190,7 @@ router.patch("/contacts/:id", async (req, res): Promise<void> => {
     activityNotes.push({ contactId: id, text: `Stage moved: ${current.pipelineStage ?? "—"} → ${updateFields.pipelineStage}`, kind: "stage_change" });
   }
   if (activityNotes.length > 0) {
-    await db.insert(contactNotesTable).values(activityNotes).catch(() => {});
+    await sharedDb.insert(contactNotesTable).values(activityNotes).catch(() => {});
   }
 
   triggerContactSync();
@@ -199,7 +199,7 @@ router.patch("/contacts/:id", async (req, res): Promise<void> => {
 
 router.delete("/contacts/:id", async (req, res): Promise<void> => {
   const { id } = req.params;
-  const [deleted] = await db.delete(contactsTable).where(eq(contactsTable.id, id)).returning({ id: contactsTable.id });
+  const [deleted] = await sharedDb.delete(contactsTable).where(eq(contactsTable.id, id)).returning({ id: contactsTable.id });
   if (!deleted) { res.status(404).json({ error: "Not found" }); return; }
   triggerContactSync();
   res.json({ ok: true, id: deleted.id });
@@ -207,7 +207,7 @@ router.delete("/contacts/:id", async (req, res): Promise<void> => {
 
 router.get("/contacts/:id/notes", async (req, res): Promise<void> => {
   const { id } = req.params;
-  const notes = await db.select().from(contactNotesTable).where(eq(contactNotesTable.contactId, id)).orderBy(desc(contactNotesTable.createdAt)).limit(100);
+  const notes = await sharedDb.select().from(contactNotesTable).where(eq(contactNotesTable.contactId, id)).orderBy(desc(contactNotesTable.createdAt)).limit(100);
   res.json(notes);
 });
 
@@ -219,7 +219,7 @@ router.post("/contacts/:id/notes", async (req, res): Promise<void> => {
     return;
   }
 
-  const [note] = await db.insert(contactNotesTable).values({
+  const [note] = await sharedDb.insert(contactNotesTable).values({
     contactId: id,
     text: body.text.trim(),
   }).returning();
@@ -233,7 +233,7 @@ router.get("/contacts/:id/draft", async (req, res): Promise<void> => {
   const { id } = req.params;
   try {
     // Find the most recent call with a draft that hasn't been sent
-    const [call] = await db.select({ followUpText: callLogTable.followUpText, createdAt: callLogTable.createdAt })
+    const [call] = await sharedDb.select({ followUpText: callLogTable.followUpText, createdAt: callLogTable.createdAt })
       .from(callLogTable)
       .where(and(eq(callLogTable.contactId, id), eq(callLogTable.followUpSent, false), sql`${callLogTable.followUpText} IS NOT NULL`))
       .orderBy(desc(callLogTable.createdAt))
@@ -242,7 +242,7 @@ router.get("/contacts/:id/draft", async (req, res): Promise<void> => {
     if (!call?.followUpText) { res.json({ draft: null }); return; }
 
     // Check if draft is newer than last communication
-    const [contact] = await db.select({ lastContactDate: contactsTable.lastContactDate })
+    const [contact] = await sharedDb.select({ lastContactDate: contactsTable.lastContactDate })
       .from(contactsTable).where(eq(contactsTable.id, id)).limit(1);
 
     if (contact?.lastContactDate && call.createdAt) {

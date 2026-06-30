@@ -2,7 +2,7 @@
 // inserts goal_completions on done, and pushes the 411 sheet (silent on err).
 
 import type { ToolHandler } from "../index.js";
-import { db } from "@workspace/db";
+import { sharedDb } from "@workspace/db";
 import { companyGoalsTable, goalCompletionsTable } from "../../../lib/schema-v2.js";
 import { eq } from "drizzle-orm";
 import { push411ToSheet } from "../../../routes/tcc/business.js";
@@ -18,11 +18,11 @@ const handler: ToolHandler = async (input) => {
     if (input.owner) updates.owner = String(input.owner);
     if (input.due_date) updates.dueDate = String(input.due_date);
     const goalIdStr = String(input.goal_id);
-    const [updated] = await db.update(companyGoalsTable).set(updates)
+    const [updated] = await sharedDb.update(companyGoalsTable).set(updates)
       .where(eq(companyGoalsTable.id, goalIdStr)).returning();
     if (!updated) return `Goal ${goalIdStr} not found`;
     if (input.status === "done") {
-      await db.insert(goalCompletionsTable).values({
+      await sharedDb.insert(goalCompletionsTable).values({
         goalId: goalIdStr, goalTitle: updated.title, horizon: updated.horizon,
       }).catch(() => {});
     }

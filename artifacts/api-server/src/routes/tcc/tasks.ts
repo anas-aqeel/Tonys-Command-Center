@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, taskCompletionsTable, taskWorkNotesTable } from "@workspace/db";
+import { personalDb, taskCompletionsTable, taskWorkNotesTable } from "@workspace/db";
 import { MarkTaskCompleteBody } from "@workspace/api-zod";
 import { eq, gte, and, desc } from "drizzle-orm";
 import { getLinearIssues } from "../../lib/linear";
@@ -18,7 +18,7 @@ router.get("/tasks/completed", async (req, res): Promise<void> => {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  const completions = await db
+  const completions = await personalDb
     .select()
     .from(taskCompletionsTable)
     .where(gte(taskCompletionsTable.completedAt, today));
@@ -33,7 +33,7 @@ router.post("/tasks/completed", async (req, res): Promise<void> => {
     return;
   }
 
-  const [completion] = await db
+  const [completion] = await personalDb
     .insert(taskCompletionsTable)
     .values({
       taskId: parsed.data.taskId,
@@ -51,7 +51,7 @@ router.delete("/tasks/completed/:taskId", async (req, res): Promise<void> => {
     return;
   }
 
-  await db
+  await personalDb
     .delete(taskCompletionsTable)
     .where(eq(taskCompletionsTable.taskId, taskId));
 
@@ -85,7 +85,7 @@ router.post("/tasks/work-note", async (req, res): Promise<void> => {
   }
 
   const today = todayPacific();
-  const [record] = await db
+  const [record] = await personalDb
     .insert(taskWorkNotesTable)
     .values({
       taskId,
@@ -110,7 +110,7 @@ router.get("/tasks/work-notes/:taskId", async (req, res): Promise<void> => {
     return;
   }
 
-  const notes = await db
+  const notes = await personalDb
     .select()
     .from(taskWorkNotesTable)
     .where(eq(taskWorkNotesTable.taskId, taskId))
@@ -122,7 +122,7 @@ router.get("/tasks/work-notes/:taskId", async (req, res): Promise<void> => {
 // Get all work notes logged today (for EOD)
 router.get("/tasks/work-notes-today", async (req, res): Promise<void> => {
   const today = todayPacific();
-  const notes = await db
+  const notes = await personalDb
     .select()
     .from(taskWorkNotesTable)
     .where(eq(taskWorkNotesTable.date, today));
@@ -153,7 +153,7 @@ router.get("/tasks/linear", async (req, res): Promise<void> => {
 
 // Get all active local tasks
 router.get("/tasks/local", async (req, res): Promise<void> => {
-  const tasks = await db
+  const tasks = await personalDb
     .select()
     .from(localTasksTable)
     .where(eq(localTasksTable.status, "active"))
@@ -165,7 +165,7 @@ router.patch("/tasks/local/:id", async (req, res): Promise<void> => {
   const { id } = req.params;
   const { status } = req.body as { status?: string };
 
-  const [updated] = await db
+  const [updated] = await personalDb
     .update(localTasksTable)
     .set({ status: status || "done" })
     .where(eq(localTasksTable.id, id))
@@ -291,7 +291,7 @@ router.post("/tasks/create-with-check", async (req, res): Promise<void> => {
   } catch { /* ok — Linear may not be connected */ }
 
   try {
-    const rows = await db
+    const rows = await personalDb
       .select()
       .from(localTasksTable)
       .where(eq(localTasksTable.status, "active"))
@@ -321,7 +321,7 @@ router.post("/tasks/create-with-check", async (req, res): Promise<void> => {
   }
 
   // Save the task to local DB first
-  const [task] = await db
+  const [task] = await personalDb
     .insert(localTasksTable)
     .values({
       text,
@@ -355,7 +355,7 @@ router.post("/tasks/create-with-check", async (req, res): Promise<void> => {
   // Create matching Google Task (fire-and-forget, update googleTaskId when done)
   createGoogleTask(text, dueDate ?? null).then(async googleTaskId => {
     if (googleTaskId) {
-      await db
+      await personalDb
         .update(localTasksTable)
         .set({ googleTaskId })
         .where(eq(localTasksTable.id, task.id));
@@ -366,7 +366,7 @@ router.post("/tasks/create-with-check", async (req, res): Promise<void> => {
 });
 
 async function syncGoogleCompletions(): Promise<number> {
-  const localTasks = await db
+  const localTasks = await personalDb
     .select()
     .from(localTasksTable)
     .where(eq(localTasksTable.status, "active"));
@@ -393,7 +393,7 @@ async function syncGoogleCompletions(): Promise<number> {
   let synced = 0;
   for (const local of linked) {
     if (local.googleTaskId && completedIds.has(local.googleTaskId)) {
-      await db
+      await personalDb
         .update(localTasksTable)
         .set({ status: "done" })
         .where(eq(localTasksTable.id, local.id));
@@ -421,7 +421,7 @@ router.get("/tasks/refresh", async (req, res): Promise<void> => {
     console.warn("[tasks/refresh] Google sync step failed:", err instanceof Error ? err.message : err);
   }
 
-  const tasks = await db
+  const tasks = await personalDb
     .select()
     .from(localTasksTable)
     .where(eq(localTasksTable.status, "active"))

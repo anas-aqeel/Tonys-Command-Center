@@ -2,7 +2,7 @@
 // Returns every agent_memory_entries row for the requested agent.
 
 import type { ToolHandler } from "../index.js";
-import { db, agentMemoryEntriesTable } from "@workspace/db";
+import { personalDb, agentMemoryEntriesTable } from "@workspace/db";
 import { eq, asc } from "drizzle-orm";
 
 interface Input {
@@ -15,7 +15,7 @@ const handler: ToolHandler = async (input) => {
     return { error: "agent is required (string)" };
   }
 
-  const rows = await db.select({
+  const rows = await personalDb.select({
     kind: agentMemoryEntriesTable.kind,
     section_name: agentMemoryEntriesTable.sectionName,
     content: agentMemoryEntriesTable.content,

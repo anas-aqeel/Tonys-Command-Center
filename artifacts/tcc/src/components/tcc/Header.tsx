@@ -123,9 +123,9 @@ export function Header({ clock, ideas, unresolved, snoozedCount = 0, calSide, eo
   const [attendeeBriefExpanded, setAttendeeBriefExpanded] = useState(false);
   const [showEodModal, setShowEodModal] = useState(false);
   const [eodText, setEodText] = useState("");
-  const [eodTo, setEodTo] = useState("ethan@flipiq.com");
+  const [eodTo, setEodTo] = useState(import.meta.env.VITE_ACCOUNTABILITY_EMAIL || "ethan@flipiq.com");
   // Default EOD subject — canonical "EOD Report — YYYY-MM-DD" in Pacific.
-  // Editable in the modal so Tony can override before sending (Bug 14).
+  // Editable in the modal so user can override before sending (Bug 14).
   const [eodSubject, setEodSubject] = useState(() => {
     const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
     return `EOD Report — ${today}`;
@@ -533,7 +533,7 @@ export function Header({ clock, ideas, unresolved, snoozedCount = 0, calSide, eo
               <input
                 value={eodTo}
                 onChange={e => setEodTo(e.target.value)}
-                placeholder="ethan@flipiq.com"
+                placeholder={import.meta.env.VITE_ACCOUNTABILITY_EMAIL || "ethan@flipiq.com"}
                 style={{ width: "100%", padding: "9px 12px", fontSize: 13, border: "1px solid #DDD", borderRadius: 8, fontFamily: F, boxSizing: "border-box" }}
               />
             </div>

@@ -2,7 +2,7 @@
 // Used to fetch the batch Tony selected on Train.
 
 import type { ToolHandler } from "../index.js";
-import { db, agentFeedbackTable } from "@workspace/db";
+import { personalDb, agentFeedbackTable } from "@workspace/db";
 import { inArray } from "drizzle-orm";
 
 interface Input {
@@ -15,7 +15,7 @@ const handler: ToolHandler = async (input) => {
     return { error: "feedback_ids must be a non-empty array of strings" };
   }
 
-  const rows = await db.select().from(agentFeedbackTable)
+  const rows = await personalDb.select().from(agentFeedbackTable)
     .where(inArray(agentFeedbackTable.id, feedback_ids));
 
   return { count: rows.length, feedback: rows };

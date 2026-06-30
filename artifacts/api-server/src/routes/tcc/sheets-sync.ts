@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, contactNotesTable } from "@workspace/db";
+import { sharedDb, contactNotesTable } from "@workspace/db";
 import { contactsTable } from "@workspace/db";
 import { appendToSheet, getSheetValues, getSheetsClient } from "../../lib/google-sheets";
 import { readGoogleDoc } from "../../lib/google-drive";
@@ -71,7 +71,7 @@ export async function syncTasksTab(): Promise<void> {
   if (!BUSINESS_MASTER_SHEET_ID) return;
   try {
     // Pull all plan tasks (the real task system — 411 Plan)
-    const planTasks = await db.select().from(planItemsTable)
+    const planTasks = await sharedDb.select().from(planItemsTable)
       .where(eq(planItemsTable.level, "task"))
       .orderBy(asc(planItemsTable.priorityOrder))
       .limit(500);
@@ -117,12 +117,12 @@ export async function syncTasksTab(): Promise<void> {
 export async function syncContactsTab(): Promise<void> {
   if (!BUSINESS_MASTER_SHEET_ID) return;
   try {
-    const contacts = await db.select().from(contactsTable).orderBy(desc(contactsTable.updatedAt)).limit(10000);
+    const contacts = await sharedDb.select().from(contactsTable).orderBy(desc(contactsTable.updatedAt)).limit(10000);
 
     // Fetch notes, activity, and meetings for all contacts in bulk
     const [allNotes, allComms] = await Promise.all([
-      db.select().from(contactNotesTable).orderBy(desc(contactNotesTable.createdAt)).limit(50000),
-      db.select().from(communicationLogTable).orderBy(desc(communicationLogTable.loggedAt)).limit(50000),
+      sharedDb.select().from(contactNotesTable).orderBy(desc(contactNotesTable.createdAt)).limit(50000),
+      sharedDb.select().from(communicationLogTable).orderBy(desc(communicationLogTable.loggedAt)).limit(50000),
     ]);
     const notesByContact = new Map<string, string[]>();
     for (const n of allNotes) {
@@ -187,7 +187,7 @@ export async function syncContactsTab(): Promise<void> {
 export async function syncCommsTab(): Promise<void> {
   if (!BUSINESS_MASTER_SHEET_ID) return;
   try {
-    const comms = await db.select().from(communicationLogTable).orderBy(desc(communicationLogTable.loggedAt)).limit(50000);
+    const comms = await sharedDb.select().from(communicationLogTable).orderBy(desc(communicationLogTable.loggedAt)).limit(50000);
     const header = ["ID", "Contact Name", "Channel", "Direction", "Subject", "Summary", "Logged At"];
     const rows: (string | null)[][] = comms.map(c => [
       c.id,
@@ -217,7 +217,7 @@ export async function syncContextIngest(): Promise<void> {
       summary = await summarizeDocForContext(docText, "90_day_plan");
     } catch { /* use substring fallback */ }
 
-    await db.insert(businessContextTable).values({
+    await sharedDb.insert(businessContextTable).values({
       documentType: "90_day_plan",
       content: docText.substring(0, 10000),
       summary,
@@ -309,7 +309,7 @@ router.post("/sheets/ingest-90-day-plan", async (req, res): Promise<void> => {
       summary = await summarizeDocForContext(docText, "90_day_plan");
     } catch { /* use substring fallback */ }
 
-    await db.insert(businessContextTable).values({
+    await sharedDb.insert(businessContextTable).values({
       documentType: "90_day_plan",
       content: docText.substring(0, 10000),
       summary,
@@ -342,7 +342,7 @@ router.post("/sheets/ingest-business-plan", async (_req, res): Promise<void> => 
       summary = await summarizeDocForContext(docText, "business_plan");
     } catch { /* use substring fallback */ }
 
-    await db.insert(businessContextTable).values({
+    await sharedDb.insert(businessContextTable).values({
       documentType: "business_plan",
       content: docText.substring(0, 10000),
       summary,
@@ -363,7 +363,7 @@ router.post("/sheets/ingest-business-plan", async (_req, res): Promise<void> => 
 
 router.get("/business-context", async (req, res): Promise<void> => {
   try {
-    const rows = await db.select().from(businessContextTable);
+    const rows = await sharedDb.select().from(businessContextTable);
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
@@ -380,7 +380,7 @@ router.post("/business-context", async (req, res): Promise<void> => {
   }
 
   try {
-    const [row] = await db.insert(businessContextTable).values({
+    const [row] = await sharedDb.insert(businessContextTable).values({
       documentType,
       content,
       summary: summary || content.substring(0, 200),

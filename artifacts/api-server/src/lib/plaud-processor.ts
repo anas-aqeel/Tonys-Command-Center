@@ -2,7 +2,7 @@ import { searchFiles } from "./google-drive";
 import { anthropic, createTrackedMessage } from "@workspace/integrations-anthropic-ai";
 import { isAgentRuntimeEnabled } from "../agents/flags.js";
 import { runAgent } from "../agents/runtime.js";
-import { db } from "@workspace/db";
+import { sharedDb } from "@workspace/db";
 import { communicationLogTable, contactIntelligenceTable } from "./schema-v2";
 import { eq, ilike } from "drizzle-orm";
 
@@ -204,7 +204,7 @@ async function saveToDatabase(analysis: PlaudAnalysis): Promise<void> {
   ].join("\n");
 
   try {
-    await db.insert(communicationLogTable).values({
+    await sharedDb.insert(communicationLogTable).values({
       contactName: analysis.contactName,
       channel: "plaud_recording",
       direction: "outbound",
@@ -223,21 +223,21 @@ async function saveToDatabase(analysis: PlaudAnalysis): Promise<void> {
   // Update contact_intelligence if we can find a matching contact
   try {
     const { contactsTable } = await import("@workspace/db");
-    const [contact] = await db
+    const [contact] = await sharedDb
       .select()
       .from(contactsTable)
       .where(ilike(contactsTable.name, `%${analysis.contactName.split(" ")[0]}%`))
       .limit(1);
 
     if (contact) {
-      const [existing] = await db
+      const [existing] = await sharedDb
         .select()
         .from(contactIntelligenceTable)
         .where(eq(contactIntelligenceTable.contactId, contact.id))
         .limit(1);
 
       if (existing) {
-        await db
+        await sharedDb
           .update(contactIntelligenceTable)
           .set({
             totalCalls: (existing.totalCalls ?? 0) + 1,
@@ -251,7 +251,7 @@ async function saveToDatabase(analysis: PlaudAnalysis): Promise<void> {
           })
           .where(eq(contactIntelligenceTable.contactId, contact.id));
       } else {
-        await db.insert(contactIntelligenceTable).values({
+        await sharedDb.insert(contactIntelligenceTable).values({
           contactId: contact.id,
           totalCalls: 1,
           lastCommunicationDate: new Date(),

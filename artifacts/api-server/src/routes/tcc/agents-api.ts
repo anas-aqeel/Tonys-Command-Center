@@ -4,7 +4,7 @@
 
 import { Router, type IRouter } from "express";
 import { z } from "zod";
-import { db, agentTrainingRunsTable, agentMemoryProposalsTable, agentFeedbackTable, agentSkillsTable, agentMemoryEntriesTable, agentRunsTable } from "@workspace/db";
+import { personalDb, agentTrainingRunsTable, agentMemoryProposalsTable, agentFeedbackTable, agentSkillsTable, agentMemoryEntriesTable, agentRunsTable } from "@workspace/db";
 import { and, eq, desc, isNull, sql, inArray, asc } from "drizzle-orm";
 import { getTrainingState, applyApprovedProposal, rejectProposal } from "../../agents/proposals.js";
 import { analyzeFeedback } from "../../agents/coach.js";
@@ -15,7 +15,7 @@ const router: IRouter = Router();
 // ── List specialists (sidebar) ───────────────────────────────────────────────
 router.get("/agents", async (_req, res): Promise<void> => {
   // Distinct agents from agent_skills + flag state
-  const rows = await db.selectDistinct({ agent: agentSkillsTable.agent }).from(agentSkillsTable);
+  const rows = await personalDb.selectDistinct({ agent: agentSkillsTable.agent }).from(agentSkillsTable);
   const flags = snapshotFlags();
   res.json({
     agents: rows.map(r => ({
@@ -47,7 +47,7 @@ router.post("/agents/:agent/training/start", async (req, res): Promise<void> => 
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
   // Pre-check: any running run for this agent? (TTL sweeper would mark stuck runs failed — Phase 1)
-  const [running] = await db.select({ id: agentTrainingRunsTable.id })
+  const [running] = await personalDb.select({ id: agentTrainingRunsTable.id })
     .from(agentTrainingRunsTable)
     .where(and(eq(agentTrainingRunsTable.agent, agent), eq(agentTrainingRunsTable.status, "running")))
     .limit(1);
@@ -57,7 +57,7 @@ router.post("/agents/:agent/training/start", async (req, res): Promise<void> => 
   }
 
   // Validate feedback ids belong to this agent + are unconsumed
-  const fbRows = await db.select({ id: agentFeedbackTable.id })
+  const fbRows = await personalDb.select({ id: agentFeedbackTable.id })
     .from(agentFeedbackTable)
     .where(and(
       eq(agentFeedbackTable.agent, agent),
@@ -70,7 +70,7 @@ router.post("/agents/:agent/training/start", async (req, res): Promise<void> => 
   }
 
   // Create the run row first (status=running) so the Train button locks immediately.
-  const [run] = await db.insert(agentTrainingRunsTable).values({
+  const [run] = await personalDb.insert(agentTrainingRunsTable).values({
     agent,
     startedBy: parsed.data.started_by || "unknown",
     status: "running",
@@ -85,7 +85,7 @@ router.post("/agents/:agent/training/start", async (req, res): Promise<void> => 
     feedbackIds: parsed.data.feedback_ids,
   }).catch(err => {
     console.error(`[agents-api] Coach failed for run ${run.id}:`, err);
-    db.update(agentTrainingRunsTable).set({
+    personalDb.update(agentTrainingRunsTable).set({
       status: "failed",
       finishedAt: new Date(),
       failureReason: err instanceof Error ? err.message : String(err),
@@ -101,7 +101,7 @@ router.get("/agents/:agent/feedback", async (req, res): Promise<void> => {
   if (!agent) { res.status(400).json({ error: "agent required" }); return; }
   const showConsumed = req.query.consumed === "true";
 
-  const rows = await db.select().from(agentFeedbackTable)
+  const rows = await personalDb.select().from(agentFeedbackTable)
     .where(showConsumed
       ? eq(agentFeedbackTable.agent, agent)
       : and(eq(agentFeedbackTable.agent, agent), isNull(agentFeedbackTable.consumedAt))!)
@@ -117,7 +117,7 @@ router.get("/agents/:agent/proposals", async (req, res): Promise<void> => {
   if (!agent) { res.status(400).json({ error: "agent required" }); return; }
   const status = (req.query.status as string) || "pending";
 
-  const rows = await db.select().from(agentMemoryProposalsTable)
+  const rows = await personalDb.select().from(agentMemoryProposalsTable)
     .where(and(eq(agentMemoryProposalsTable.agent, agent), eq(agentMemoryProposalsTable.status, status)))
     .orderBy(desc(agentMemoryProposalsTable.createdAt))
     .limit(50);
@@ -160,7 +160,7 @@ router.get("/agents/:agent/memory", async (req, res): Promise<void> => {
   const agent = req.params.agent;
   if (!agent) { res.status(400).json({ error: "agent required" }); return; }
 
-  const rows = await db.select({
+  const rows = await personalDb.select({
     kind: agentMemoryEntriesTable.kind,
     section_name: agentMemoryEntriesTable.sectionName,
     version: agentMemoryEntriesTable.version,
@@ -179,7 +179,7 @@ router.get("/agents/:agent/memory/:section", async (req, res): Promise<void> => 
   if (!agent || !section) { res.status(400).json({ error: "agent + section required" }); return; }
   const kind = (req.query.kind as string) || "memory";
 
-  const [row] = await db.select().from(agentMemoryEntriesTable)
+  const [row] = await personalDb.select().from(agentMemoryEntriesTable)
     .where(and(
       eq(agentMemoryEntriesTable.agent, agent),
       eq(agentMemoryEntriesTable.kind, kind),
@@ -219,7 +219,7 @@ router.put("/agents/:agent/memory/:section", async (req, res): Promise<void> => 
 
   const updatedBy = parsed.data.updated_by || "tony";
 
-  const [existing] = await db.select().from(agentMemoryEntriesTable)
+  const [existing] = await personalDb.select().from(agentMemoryEntriesTable)
     .where(and(
       eq(agentMemoryEntriesTable.agent, agent),
       eq(agentMemoryEntriesTable.kind, kind),
@@ -227,14 +227,14 @@ router.put("/agents/:agent/memory/:section", async (req, res): Promise<void> => 
     )).limit(1);
 
   if (existing) {
-    await db.update(agentMemoryEntriesTable).set({
+    await personalDb.update(agentMemoryEntriesTable).set({
       content: parsed.data.content,
       version: sql`${agentMemoryEntriesTable.version} + 1`,
       updatedAt: new Date(),
       updatedBy,
     }).where(eq(agentMemoryEntriesTable.id, existing.id));
   } else {
-    await db.insert(agentMemoryEntriesTable).values({
+    await personalDb.insert(agentMemoryEntriesTable).values({
       agent,
       kind,
       sectionName: section,
@@ -258,7 +258,7 @@ router.get("/agents/:agent/runs", async (req, res): Promise<void> => {
     ? and(eq(agentRunsTable.agent, agent), eq(agentRunsTable.skill, skill))!
     : eq(agentRunsTable.agent, agent);
 
-  const rows = await db.select().from(agentRunsTable)
+  const rows = await personalDb.select().from(agentRunsTable)
     .where(where)
     .orderBy(desc(agentRunsTable.createdAt))
     .limit(limit);
@@ -271,7 +271,7 @@ router.get("/agents/:agent/skills", async (req, res): Promise<void> => {
   const agent = req.params.agent;
   if (!agent) { res.status(400).json({ error: "agent required" }); return; }
 
-  const rows = await db.select().from(agentSkillsTable)
+  const rows = await personalDb.select().from(agentSkillsTable)
     .where(eq(agentSkillsTable.agent, agent))
     .orderBy(asc(agentSkillsTable.skillName));
 
@@ -334,7 +334,7 @@ router.put("/agents/:agent/skills/:skill/model-override", async (req, res): Prom
     }
   }
 
-  await db.update(agentSkillsTable)
+  await personalDb.update(agentSkillsTable)
     .set(updates)
     .where(and(eq(agentSkillsTable.agent, agent), eq(agentSkillsTable.skillName, skillName)));
 
@@ -363,7 +363,7 @@ router.post("/agents/:agent/skills/:skill/test-connection", async (req, res): Pr
   let apiKey = parsed.data.api_key;
   if (!apiKey) {
     // Use the skill's saved key — decrypt agent_skills.api_key_cipher.
-    const [row] = await db.select().from(agentSkillsTable)
+    const [row] = await personalDb.select().from(agentSkillsTable)
       .where(and(eq(agentSkillsTable.agent, agent), eq(agentSkillsTable.skillName, skillName)))
       .limit(1);
     const cipher = (row as { apiKeyCipher?: string | null } | undefined)?.apiKeyCipher;

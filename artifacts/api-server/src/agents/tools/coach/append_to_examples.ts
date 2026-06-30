@@ -5,7 +5,7 @@
 // Used by the coach.append-example skill (Phase 2+, registered now).
 
 import type { ToolHandler } from "../index.js";
-import { db, agentMemoryEntriesTable, agentSkillsTable } from "@workspace/db";
+import { personalDb, agentMemoryEntriesTable, agentSkillsTable } from "@workspace/db";
 import { and, eq, sql } from "drizzle-orm";
 
 interface Input {
@@ -25,7 +25,7 @@ const handler: ToolHandler = async (input) => {
   }
 
   // Check skill opt-in
-  const [skillRow] = await db.select().from(agentSkillsTable)
+  const [skillRow] = await personalDb.select().from(agentSkillsTable)
     .where(and(eq(agentSkillsTable.agent, agent), eq(agentSkillsTable.skillName, skill)))
     .limit(1);
   if (!skillRow) {
@@ -39,7 +39,7 @@ const handler: ToolHandler = async (input) => {
   const stamp = new Date().toISOString().slice(0, 10);
   const entry = `\n\n## Example added ${stamp}\n${example.why_good ? `**Why good:** ${example.why_good}\n\n` : ""}**Input:**\n\`\`\`\n${example.input}\n\`\`\`\n\n**Output:**\n\`\`\`\n${example.output}\n\`\`\`\n`;
 
-  const [existing] = await db.select().from(agentMemoryEntriesTable)
+  const [existing] = await personalDb.select().from(agentMemoryEntriesTable)
     .where(and(
       eq(agentMemoryEntriesTable.agent, agent),
       eq(agentMemoryEntriesTable.kind, "memory"),
@@ -47,14 +47,14 @@ const handler: ToolHandler = async (input) => {
     )).limit(1);
 
   if (existing) {
-    await db.update(agentMemoryEntriesTable).set({
+    await personalDb.update(agentMemoryEntriesTable).set({
       content: existing.content + entry,
       version: sql`${agentMemoryEntriesTable.version} + 1`,
       updatedAt: new Date(),
       updatedBy: "coach",
     }).where(eq(agentMemoryEntriesTable.id, existing.id));
   } else {
-    await db.insert(agentMemoryEntriesTable).values({
+    await personalDb.insert(agentMemoryEntriesTable).values({
       agent,
       kind: "memory",
       sectionName,

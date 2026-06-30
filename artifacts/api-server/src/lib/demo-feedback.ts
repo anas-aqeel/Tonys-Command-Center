@@ -75,9 +75,9 @@ Keep it actionable and under 300 words.`;
 
     if (analysisText) {
       try {
-        const { db } = await import("@workspace/db");
+        const { sharedDb } = await import("@workspace/db");
         const { communicationLogTable } = await import("./schema-v2");
-        await db.insert(communicationLogTable).values({
+        await sharedDb.insert(communicationLogTable).values({
           contactName: eventName.replace(/flipiq demo/i, "").trim() || "Demo participant",
           channel: "meeting",
           direction: "outbound",

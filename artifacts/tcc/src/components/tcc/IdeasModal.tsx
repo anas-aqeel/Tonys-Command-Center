@@ -204,7 +204,7 @@ export function IdeasModal({ open, onClose, onSave, onCreateTask, count }: Props
     post("/ideas/notify-assignee", {
       ideaText: text, category: categoryArg, urgency: urgencyArg, dueDate: "",
       assigneeName: a.assigneeName.trim(),
-      assigneeEmail: email || `${a.assigneeName.trim().toLowerCase().replace(/\s+/g, ".")}@flipiq.com`,
+      assigneeEmail: email || `${a.assigneeName.trim().toLowerCase().replace(/\s+/g, ".")}@${import.meta.env.VITE_EMAIL_DOMAIN || "flipiq.com"}`,
       slackUserId: slackId || undefined,
       notifyChannels: channels,
     }).catch(() => console.warn("[Ideas] pushback assignee notify failed"));
@@ -376,7 +376,7 @@ export function IdeasModal({ open, onClose, onSave, onCreateTask, count }: Props
           post("/ideas/notify-assignee", {
             ideaText: text, category: finalCat, urgency: finalUrg, dueDate: dueDate || "",
             assigneeName,
-            assigneeEmail: assigneeEmail || `${assigneeName.toLowerCase().replace(/\s+/g, ".")}@flipiq.com`,
+            assigneeEmail: assigneeEmail || `${assigneeName.toLowerCase().replace(/\s+/g, ".")}@${import.meta.env.VITE_EMAIL_DOMAIN || "flipiq.com"}`,
             slackUserId: assign?.assigneeSlackId || undefined,
             notifyChannels, note: assign!.note || undefined,
           }).catch(() => console.warn("[Ideas] Failed to send assignee notification"));
@@ -523,7 +523,7 @@ export function IdeasModal({ open, onClose, onSave, onCreateTask, count }: Props
                     style={{ ...inp, padding: "6px 10px", fontSize: 13 }}
                   />
                   <div style={{ fontSize: 10, color: C.mut, marginTop: 4 }}>
-                    Default tomorrow at 2pm. Calendar invite sent to ethan@flipiq.com.
+                    Default tomorrow at 2pm. Calendar invite sent to {import.meta.env.VITE_ACCOUNTABILITY_EMAIL || "ethan@flipiq.com"}.
                   </div>
                 </div>
 

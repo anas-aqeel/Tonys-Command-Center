@@ -12,7 +12,7 @@
 //           reads DB to assemble the snapshot.
 //     If neither is provided, the capturer runs with no extras.
 
-import { db, agentFeedbackTable } from "@workspace/db";
+import { personalDb, agentFeedbackTable } from "@workspace/db";
 import { isFeedbackPipelineEnabled } from "./flags.js";
 import { captureSnapshot } from "./snapshots/index.js";
 
@@ -57,7 +57,7 @@ export async function recordFeedback(input: RecordFeedbackInput): Promise<Record
   }
 
   try {
-    const inserted = await db.insert(agentFeedbackTable).values({
+    const inserted = await personalDb.insert(agentFeedbackTable).values({
       agent: input.agent,
       skill: input.skill,
       sourceType: input.sourceType,

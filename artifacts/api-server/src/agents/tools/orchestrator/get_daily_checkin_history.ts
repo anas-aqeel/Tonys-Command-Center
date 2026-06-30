@@ -1,12 +1,12 @@
 // get_daily_checkin_history — orchestrator wrapper. Reads tcc_checkins rows.
 
 import type { ToolHandler } from "../index.js";
-import { db, checkinsTable } from "@workspace/db";
+import { personalDb, checkinsTable } from "@workspace/db";
 import { desc } from "drizzle-orm";
 
 const handler: ToolHandler = async (input) => {
   const days = typeof input.days === "number" ? Math.min(input.days, 30) : 7;
-  const rows = await db.select().from(checkinsTable).orderBy(desc(checkinsTable.date)).limit(days);
+  const rows = await personalDb.select().from(checkinsTable).orderBy(desc(checkinsTable.date)).limit(days);
   if (rows.length === 0) return "No check-in history found.";
   return rows.map((r, i) => {
     const parts = [`${i + 1}. [${r.date}]`];

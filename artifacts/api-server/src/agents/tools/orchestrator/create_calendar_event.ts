@@ -14,7 +14,7 @@ const handler: ToolHandler = async (input) => {
     || summaryLower.includes("ramy") || summaryLower.includes("follow up");
 
   if (!isSalesRelated && purpose !== "sales" && purpose !== "ramy_support") {
-    return `⚠️ SCOPE GATEKEEPER: This event ("${input.summary}") doesn't appear to be sales-related or Ramy support. Tony's priority: (1) Sales calls, (2) Ramy support, (3) everything else pushed to off-hours. Confirm this is necessary or reschedule outside prime selling hours (9AM–5PM PT).`;
+    return `⚠️ SCOPE GATEKEEPER: This event ("${input.summary}") doesn't appear to be sales-related or Ramy support. ${(process.env.TCC_USER_NAME || "Tony").split(/\s+/)[0]}'s priority: (1) Sales calls, (2) Ramy support, (3) everything else pushed to off-hours. Confirm this is necessary or reschedule outside prime selling hours (9AM–5PM PT).`;
   }
 
   const startStr = String(input.start);

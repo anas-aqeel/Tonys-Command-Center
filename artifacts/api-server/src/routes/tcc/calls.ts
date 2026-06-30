@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, callLogTable, contactsTable } from "@workspace/db";
+import { sharedDb, callLogTable, contactsTable } from "@workspace/db";
 import { LogCallBody } from "@workspace/api-zod";
 import { gte, eq, sql } from "drizzle-orm";
 import { anthropic, createTrackedMessage } from "@workspace/integrations-anthropic-ai";
@@ -17,7 +17,7 @@ router.get("/calls", async (req, res): Promise<void> => {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  const calls = await db
+  const calls = await sharedDb
     .select()
     .from(callLogTable)
     .where(gte(callLogTable.createdAt, today));
@@ -35,7 +35,7 @@ router.post("/calls", async (req, res): Promise<void> => {
   const { contactId, contactName, type, notes } = parsed.data;
   const instructions = (req.body as Record<string, unknown>).instructions as string | undefined;
 
-  const [call] = await db
+  const [call] = await sharedDb
     .insert(callLogTable)
     .values({
       contactId: contactId ?? undefined,
@@ -47,7 +47,7 @@ router.post("/calls", async (req, res): Promise<void> => {
 
   // Always log to communication_log when we have a contactId
   if (contactId) {
-    await db.insert(communicationLogTable).values({
+    await sharedDb.insert(communicationLogTable).values({
       contactId,
       contactName,
       channel: "call_outbound",
@@ -102,7 +102,7 @@ Draft a brief, professional follow-up email (3-4 sentences max). Plain text only
       draftText = draftText ? substituteContactTokens(draftText, { name: contactName }) : undefined;
 
       if (draftText) {
-        const [updated] = await db.update(callLogTable)
+        const [updated] = await sharedDb.update(callLogTable)
           .set({ followUpText: draftText, followUpSent: false })
           .where(eq(callLogTable.id, call.id))
           .returning();
@@ -142,7 +142,7 @@ router.post("/calls/connected-outcome", async (req, res): Promise<void> => {
   const resolvedFollowUpType = followUpType ?? "follow_up";
 
   try {
-    await db.insert(communicationLogTable).values({
+    await sharedDb.insert(communicationLogTable).values({
       contactId,
       contactName,
       channel: "call_outbound",
@@ -154,7 +154,7 @@ router.post("/calls/connected-outcome", async (req, res): Promise<void> => {
 
     // Record the call attempt + the follow-up type so the dashboard "appointments
     // booked today" counter can read it without going to GCal title parsing.
-    await db.insert(callLogTable).values({
+    await sharedDb.insert(callLogTable).values({
       contactId,
       contactName,
       type: "connected",
@@ -165,7 +165,7 @@ router.post("/calls/connected-outcome", async (req, res): Promise<void> => {
     if (followUpDate) {
       const nextActionText = nextStep || `Follow up with ${contactName}`;
 
-      await db.execute(sql`
+      await sharedDb.execute(sql`
         INSERT INTO contact_intelligence (id, contact_id, next_action, next_action_date, updated_at)
         VALUES (gen_random_uuid(), ${contactId}, ${nextActionText}, ${followUpDate}, NOW())
         ON CONFLICT (contact_id) DO UPDATE SET

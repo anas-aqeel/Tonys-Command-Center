@@ -1,6 +1,6 @@
 // Contacts feedback snapshot — for research / card-ocr / pre-call-brief feedback.
 
-import { db, contactsTable, contactIntelligenceTable, contactBriefsTable, communicationLogTable } from "@workspace/db";
+import { sharedDb, contactsTable, contactIntelligenceTable, contactBriefsTable, communicationLogTable } from "@workspace/db";
 import { eq, desc } from "drizzle-orm";
 
 export async function captureContactsSnapshot(
@@ -14,24 +14,24 @@ export async function captureContactsSnapshot(
   let recentComms: any[] = [];
 
   if (sourceId && /^[0-9a-f-]{36}$/i.test(sourceId)) {
-    const [c] = await db.select().from(contactsTable)
+    const [c] = await sharedDb.select().from(contactsTable)
       .where(eq(contactsTable.id, sourceId))
       .limit(1);
     contact = c || null;
 
     if (contact?.id) {
-      const [i] = await db.select().from(contactIntelligenceTable)
+      const [i] = await sharedDb.select().from(contactIntelligenceTable)
         .where(eq(contactIntelligenceTable.contactId, contact.id))
         .limit(1);
       intelligence = i || null;
 
-      const [b] = await db.select().from(contactBriefsTable)
+      const [b] = await sharedDb.select().from(contactBriefsTable)
         .where(eq(contactBriefsTable.contactId, contact.id))
         .orderBy(desc(contactBriefsTable.generatedAt))
         .limit(1);
       brief = b || null;
 
-      recentComms = await db.select().from(communicationLogTable)
+      recentComms = await sharedDb.select().from(communicationLogTable)
         .where(eq(communicationLogTable.contactId, contact.id))
         .orderBy(desc(communicationLogTable.loggedAt))
         .limit(6);

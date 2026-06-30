@@ -2,11 +2,11 @@
 // priority rules from the system_instructions table.
 
 import type { ToolHandler } from "../index.js";
-import { db, systemInstructionsTable } from "@workspace/db";
+import { personalDb, systemInstructionsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 
 const handler: ToolHandler = async () => {
-  const [row] = await db
+  const [row] = await personalDb
     .select()
     .from(systemInstructionsTable)
     .where(eq(systemInstructionsTable.section, "email_brain"));

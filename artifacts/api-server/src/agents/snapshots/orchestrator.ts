@@ -1,6 +1,6 @@
 // Orchestrator feedback snapshot — for chat thumbs / classification corrections.
 
-import { db, chatThreadsTable, chatMessagesTable } from "@workspace/db";
+import { personalDb, chatThreadsTable, chatMessagesTable } from "@workspace/db";
 import { eq, desc } from "drizzle-orm";
 
 export async function captureOrchestratorSnapshot(
@@ -14,19 +14,19 @@ export async function captureOrchestratorSnapshot(
   let recentMessages: any[] = [];
 
   if (sourceId && /^[0-9a-f-]{36}$/i.test(sourceId)) {
-    const [m] = await db.select().from(chatMessagesTable)
+    const [m] = await personalDb.select().from(chatMessagesTable)
       .where(eq(chatMessagesTable.id, sourceId))
       .limit(1);
     message = m || null;
 
     if (message?.threadId) {
-      const [t] = await db.select().from(chatThreadsTable)
+      const [t] = await personalDb.select().from(chatThreadsTable)
         .where(eq(chatThreadsTable.id, message.threadId))
         .limit(1);
       thread = t || null;
 
       // Last 6 messages on the thread for context
-      recentMessages = await db.select({
+      recentMessages = await personalDb.select({
         role: chatMessagesTable.role,
         content: chatMessagesTable.content,
         createdAt: chatMessagesTable.createdAt,

@@ -1,7 +1,7 @@
 // Ideas feedback snapshot — for classify thumbs / pushback override / generate-task feedback.
 // Per FEEDBACK_SYSTEM.md §4.2: idea text + AI classification + 90-day plan + pushback shown + override decision.
 
-import { db, ideasTable, companyGoalsTable } from "@workspace/db";
+import { sharedDb, personalDb, ideasTable, companyGoalsTable } from "@workspace/db";
 import { eq, desc } from "drizzle-orm";
 
 export async function captureIdeasSnapshot(
@@ -9,11 +9,11 @@ export async function captureIdeasSnapshot(
   sourceId: string,
   extra?: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const [idea] = await db.select().from(ideasTable)
+  const [idea] = await personalDb.select().from(ideasTable)
     .where(eq(ideasTable.id, sourceId))
     .limit(1);
 
-  const plan90 = await db.select({
+  const plan90 = await sharedDb.select({
     horizon: companyGoalsTable.horizon,
     title: companyGoalsTable.title,
     status: companyGoalsTable.status,
@@ -24,7 +24,7 @@ export async function captureIdeasSnapshot(
   // Recent ideas of similar category (for pattern context)
   let similarRecent: any[] = [];
   if (idea?.category) {
-    similarRecent = await db.select({
+    similarRecent = await personalDb.select({
       id: ideasTable.id,
       text: ideasTable.text,
       category: ideasTable.category,

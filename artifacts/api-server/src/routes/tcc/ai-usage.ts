@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { db, aiUsageLogsTable } from "@workspace/db";
+import { personalDb, aiUsageLogsTable } from "@workspace/db";
 import { desc, sql, eq, gte, and } from "drizzle-orm";
 
 const router = Router();
@@ -7,7 +7,7 @@ const router = Router();
 // POST /ai-usage/migrate — create table if not exists
 router.post("/ai-usage/migrate", async (_req, res) => {
   try {
-    await db.execute(sql`CREATE TABLE IF NOT EXISTS ai_usage_logs (
+    await personalDb.execute(sql`CREATE TABLE IF NOT EXISTS ai_usage_logs (
       id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
       timestamp TIMESTAMPTZ DEFAULT now() NOT NULL,
       feature_name TEXT NOT NULL,
@@ -28,10 +28,10 @@ router.post("/ai-usage/migrate", async (_req, res) => {
       error_message TEXT,
       metadata JSONB
     )`);
-    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_aul_timestamp ON ai_usage_logs(timestamp)`);
-    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_aul_feature ON ai_usage_logs(feature_name)`);
-    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_aul_provider ON ai_usage_logs(provider)`);
-    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_aul_model ON ai_usage_logs(model)`);
+    await personalDb.execute(sql`CREATE INDEX IF NOT EXISTS idx_aul_timestamp ON ai_usage_logs(timestamp)`);
+    await personalDb.execute(sql`CREATE INDEX IF NOT EXISTS idx_aul_feature ON ai_usage_logs(feature_name)`);
+    await personalDb.execute(sql`CREATE INDEX IF NOT EXISTS idx_aul_provider ON ai_usage_logs(provider)`);
+    await personalDb.execute(sql`CREATE INDEX IF NOT EXISTS idx_aul_model ON ai_usage_logs(model)`);
     res.json({ ok: true, message: "ai_usage_logs table created" });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -60,7 +60,7 @@ router.get("/ai-usage", async (_req, res) => {
     const where = conditions.length > 0 ? and(...conditions) : undefined;
 
     // Fetch logs
-    const logs = await db
+    const logs = await personalDb
       .select({
         id: aiUsageLogsTable.id,
         timestamp: aiUsageLogsTable.timestamp,
@@ -86,7 +86,7 @@ router.get("/ai-usage", async (_req, res) => {
       .offset(offsetN);
 
     // Total count
-    const [{ count }] = await db
+    const [{ count }] = await personalDb
       .select({ count: sql<number>`count(*)::int` })
       .from(aiUsageLogsTable)
       .where(where);
@@ -97,23 +97,23 @@ router.get("/ai-usage", async (_req, res) => {
     const weekAgo = new Date(todayStart.getTime() - 7 * 24 * 60 * 60 * 1000);
     const monthAgo = new Date(todayStart.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-    const [todayAgg] = await db
+    const [todayAgg] = await personalDb
       .select({ cost: sql<string>`coalesce(sum(total_cost_usd::numeric), 0)::text`, tokens: sql<number>`coalesce(sum(total_tokens), 0)::int`, calls: sql<number>`count(*)::int` })
       .from(aiUsageLogsTable)
       .where(gte(aiUsageLogsTable.timestamp, todayStart));
 
-    const [weekAgg] = await db
+    const [weekAgg] = await personalDb
       .select({ cost: sql<string>`coalesce(sum(total_cost_usd::numeric), 0)::text`, tokens: sql<number>`coalesce(sum(total_tokens), 0)::int`, calls: sql<number>`count(*)::int` })
       .from(aiUsageLogsTable)
       .where(gte(aiUsageLogsTable.timestamp, weekAgo));
 
-    const [monthAgg] = await db
+    const [monthAgg] = await personalDb
       .select({ cost: sql<string>`coalesce(sum(total_cost_usd::numeric), 0)::text`, tokens: sql<number>`coalesce(sum(total_tokens), 0)::int`, calls: sql<number>`count(*)::int` })
       .from(aiUsageLogsTable)
       .where(gte(aiUsageLogsTable.timestamp, monthAgo));
 
     // By feature
-    const byFeature = await db
+    const byFeature = await personalDb
       .select({
         feature: aiUsageLogsTable.featureName,
         cost: sql<string>`coalesce(sum(total_cost_usd::numeric), 0)::text`,
@@ -126,7 +126,7 @@ router.get("/ai-usage", async (_req, res) => {
       .orderBy(sql`sum(total_cost_usd::numeric) desc`);
 
     // By model
-    const byModel = await db
+    const byModel = await personalDb
       .select({
         model: aiUsageLogsTable.model,
         provider: aiUsageLogsTable.provider,
@@ -140,7 +140,7 @@ router.get("/ai-usage", async (_req, res) => {
       .orderBy(sql`sum(total_cost_usd::numeric) desc`);
 
     // By provider
-    const byProvider = await db
+    const byProvider = await personalDb
       .select({
         provider: aiUsageLogsTable.provider,
         cost: sql<string>`coalesce(sum(total_cost_usd::numeric), 0)::text`,
@@ -173,7 +173,7 @@ router.get("/ai-usage", async (_req, res) => {
 // GET /ai-usage/:id — returns full log entry with full request/response
 router.get("/ai-usage/:id", async (req, res) => {
   try {
-    const [entry] = await db
+    const [entry] = await personalDb
       .select()
       .from(aiUsageLogsTable)
       .where(eq(aiUsageLogsTable.id, req.params.id))

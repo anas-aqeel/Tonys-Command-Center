@@ -1,14 +1,14 @@
 // search_contacts — orchestrator wrapper. OR-search by name/company/type.
 
 import type { ToolHandler } from "../index.js";
-import { db, contactsTable } from "@workspace/db";
+import { sharedDb, contactsTable } from "@workspace/db";
 import { ilike, or } from "drizzle-orm";
 
 const handler: ToolHandler = async (input) => {
   try {
     const query = String(input.query);
     const limit = typeof input.limit === "number" ? Math.min(input.limit, 20) : 5;
-    const contacts = await db.select().from(contactsTable)
+    const contacts = await sharedDb.select().from(contactsTable)
       .where(
         or(
           ilike(contactsTable.name, `%${query}%`),

@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { eq, gte, sql } from "drizzle-orm";
-import { db, eodReportsTable, callLogTable, demosTable, ideasTable, taskCompletionsTable } from "@workspace/db";
+import { sharedDb, personalDb, eodReportsTable, callLogTable, demosTable, ideasTable, taskCompletionsTable } from "@workspace/db";
 import { planItemsTable } from "../../lib/schema-v2";
 import { linearGraphQL } from "../../lib/linear";
 import { anthropic, createTrackedMessage } from "@workspace/integrations-anthropic-ai";
@@ -14,7 +14,7 @@ const router: IRouter = Router();
 
 router.get("/eod-report/today", async (req, res): Promise<void> => {
   const today = todayPacific();
-  const [report] = await db.select().from(eodReportsTable).where(eq(eodReportsTable.date, today));
+  const [report] = await personalDb.select().from(eodReportsTable).where(eq(eodReportsTable.date, today));
   res.json(report || null);
 });
 
@@ -25,9 +25,9 @@ async function buildEodReport(log: any): Promise<{ reportText: string; callsMade
   todayDate.setHours(0, 0, 0, 0);
 
   const [calls, demoRows, planCompletions] = await Promise.all([
-    db.select().from(callLogTable).where(gte(callLogTable.createdAt, todayDate)),
-    db.select().from(demosTable).where(eq(demosTable.scheduledDate, today)),
-    db.select().from(planItemsTable).where(
+    sharedDb.select().from(callLogTable).where(gte(callLogTable.createdAt, todayDate)),
+    sharedDb.select().from(demosTable).where(eq(demosTable.scheduledDate, today)),
+    sharedDb.select().from(planItemsTable).where(
       sql`${planItemsTable.status} = 'completed' AND ${planItemsTable.completedAt} >= ${todayDate} AND ${planItemsTable.level} = 'task'`
     ),
   ]);
@@ -61,7 +61,7 @@ ${taskList}`;
       });
       reportText = result.text;
     } else {
-      const eodPreviewPrompt = `Generate an EOD (End of Day) report for Tony Diaz, CEO of FlipIQ.
+      const eodPreviewPrompt = `Generate an EOD (End of Day) report for ${process.env.TCC_USER_NAME || "Tony Diaz"}, ${process.env.TCC_USER_ROLE || "CEO"} of FlipIQ.
 
 Today's Data:
 - Calls Made: ${callsMade}
@@ -74,7 +74,7 @@ ${callList}
 Tasks Completed:
 ${taskList}
 
-Write a brief EOD report (3-4 paragraphs) in Tony's voice:
+Write a brief EOD report (3-4 paragraphs) in ${process.env.TCC_USER_NAME || "Tony"}'s voice:
 1. Summary of the day's sales activity
 2. Key wins and opportunities identified
 3. What needs follow-up tomorrow
@@ -122,9 +122,9 @@ router.post("/eod-report", async (req, res): Promise<void> => {
     const todayDate = new Date();
     todayDate.setHours(0, 0, 0, 0);
     const [calls, demoRows, taskCompletions] = await Promise.all([
-      db.select().from(callLogTable).where(gte(callLogTable.createdAt, todayDate)),
-      db.select().from(demosTable).where(eq(demosTable.scheduledDate, today)),
-      db.select().from(taskCompletionsTable).where(gte(taskCompletionsTable.completedAt, todayDate)),
+      sharedDb.select().from(callLogTable).where(gte(callLogTable.createdAt, todayDate)),
+      sharedDb.select().from(demosTable).where(eq(demosTable.scheduledDate, today)),
+      personalDb.select().from(taskCompletionsTable).where(gte(taskCompletionsTable.completedAt, todayDate)),
     ]);
     callsMade = calls.length;
     demosBooked = demoRows.length;
@@ -133,7 +133,7 @@ router.post("/eod-report", async (req, res): Promise<void> => {
     ({ reportText, callsMade, demosBooked, tasksCompleted } = await buildEodReport(req.log));
   }
 
-  const recipients: string[] = customTo ? [customTo] : ["tony@flipiq.com"];
+  const recipients: string[] = customTo ? [customTo] : [process.env.TCC_USER_EMAIL || "tony@flipiq.com"];
   const subject = (typeof customSubject === "string" && customSubject.trim())
     ? customSubject.trim()
     : `EOD Report — ${today}`;
@@ -151,7 +151,7 @@ router.post("/eod-report", async (req, res): Promise<void> => {
 
   const sentTo = sentResults.filter(r => r.ok).map(r => r.to).join(",") || "failed";
 
-  const [report] = await db
+  const [report] = await personalDb
     .insert(eodReportsTable)
     .values({ date: today, callsMade, demosBooked, tasksCompleted, reportText, sentTo })
     .onConflictDoUpdate({
@@ -167,35 +167,35 @@ router.post("/eod-report", async (req, res): Promise<void> => {
 export async function sendAutoEod(): Promise<{ ok: boolean; alreadySent?: boolean; error?: string; callsMade?: number; demosBooked?: number; tasksCompleted?: number }> {
   const today = todayPacific();
 
-  const [existing] = await db.select().from(eodReportsTable).where(eq(eodReportsTable.date, today));
+  const [existing] = await personalDb.select().from(eodReportsTable).where(eq(eodReportsTable.date, today));
   if (existing) return { ok: true, alreadySent: true };
 
   const todayDate = new Date();
   todayDate.setHours(0, 0, 0, 0);
 
   const [calls, demoRows, planCompletions] = await Promise.all([
-    db.select().from(callLogTable).where(gte(callLogTable.createdAt, todayDate)),
-    db.select().from(demosTable).where(eq(demosTable.scheduledDate, today)),
-    db.select().from(planItemsTable).where(
+    sharedDb.select().from(callLogTable).where(gte(callLogTable.createdAt, todayDate)),
+    sharedDb.select().from(demosTable).where(eq(demosTable.scheduledDate, today)),
+    sharedDb.select().from(planItemsTable).where(
       sql`${planItemsTable.status} = 'completed' AND ${planItemsTable.completedAt} >= ${todayDate} AND ${planItemsTable.level} = 'task'`
     ),
   ]);
 
   let emailsSent = 0;
   try {
-    const emailLogs = await db.select().from(communicationLogTable).where(gte(communicationLogTable.createdAt, todayDate));
+    const emailLogs = await sharedDb.select().from(communicationLogTable).where(gte(communicationLogTable.createdAt, todayDate));
     emailsSent = emailLogs.filter(e => e.direction === "outbound").length;
   } catch { /* non-critical */ }
 
   let ideasToday: string[] = [];
   try {
-    const ideas = await db.select().from(ideasTable).where(gte(ideasTable.createdAt, todayDate));
+    const ideas = await personalDb.select().from(ideasTable).where(gte(ideasTable.createdAt, todayDate));
     ideasToday = ideas.map(i => i.text || "");
   } catch { /* non-critical */ }
 
   let overridesToday: string[] = [];
   try {
-    const overrides = await db.select().from(ideasTable)
+    const overrides = await personalDb.select().from(ideasTable)
       .where(sql`${ideasTable.createdAt} >= ${todayDate} AND ${ideasTable.status} = 'override'`);
     overridesToday = overrides.map(o => o.text || "");
   } catch { /* non-critical */ }
@@ -256,8 +256,14 @@ export async function sendAutoEod(): Promise<{ ok: boolean; alreadySent?: boolea
   // For each recipient: legacy variant has full instructions; runtime variant
   // has only dynamic data (skill body has the format/voice rules).
 
-  // ── Tony's EOD ──
-  const tonyDataOnly = `Recipient: Tony (date ${today}).
+  const userName = process.env.TCC_USER_NAME || "Tony Diaz";
+  const userFirstName = userName.split(/\s+/)[0];
+  const userRole = process.env.TCC_USER_ROLE || "CEO";
+  const userEmail = process.env.TCC_USER_EMAIL || "tony@flipiq.com";
+  const accountabilityEmail = process.env.TCC_ACCOUNTABILITY_EMAIL || "ethan@flipiq.com";
+
+  // ── User's own EOD ──
+  const userDataOnly = `Recipient: ${userFirstName} (date ${today}).
 
 Today's Data:
 - Calls made: ${callsMade}
@@ -267,7 +273,7 @@ Today's Data:
 - Tasks completed today:\n${taskList}
 - Ideas submitted: ${ideasToday.length > 0 ? ideasToday.join(", ") : "None"}`;
 
-  const tonyPromptLegacy = `Generate Tony Diaz's EOD report for ${today} (FlipIQ CEO).
+  const userPromptLegacy = `Generate ${userName}'s EOD report for ${today} (FlipIQ ${userRole}).
 
 Today's Data:
 - Calls made: ${callsMade}
@@ -281,40 +287,41 @@ Format as a brief EOD (4 paragraphs max):
 1. Quick summary
 2. Key metrics: calls, demos, tasks
 3. What needs follow-up tomorrow
-4. One closing thought in Tony's voice — direct and honest.`;
+4. One closing thought in ${userFirstName}'s voice — direct and honest.`;
 
-  // ── Ethan's EOD ──
-  const ethanDataOnly = `Recipient: Ethan (date ${today}).
+  // ── Accountability EOD (sent to accountability partner) ──
+  const accountabilityName = (accountabilityEmail.split("@")[0] || "Accountability").replace(/^\w/, c => c.toUpperCase());
+  const accountabilityDataOnly = `Recipient: ${accountabilityName} (date ${today}).
 
-Tony's Activity:
+${userFirstName}'s Activity:
 - Calls: ${callsMade}, Demos: ${demosBooked}, Emails: ${emailsSent}
 - Tasks completed: ${tasksCompleted}
 - Accountability score: ${completionRate}%
 
-Items Without Due Dates (Ethan must assign):
+Items Without Due Dates (${accountabilityName} must assign):
 ${noDueDateItems.length > 0 ? noDueDateItems.map(t => `- ${t}`).join("\n") : "- All items have due dates ✓"}
 
 Out-of-Sequence Work (not on 90-day plan):
 ${outOfSequenceItems.length > 0 ? outOfSequenceItems.map(t => `- ${t}`).join("\n") : "- All work aligned with plan ✓"}
 
-Tony's Overrides Today:
+${userFirstName}'s Overrides Today:
 ${overridesToday.length > 0 ? overridesToday.map(o => `- ${o}`).join("\n") : "- No overrides today ✓"}
 
 Pitch/Demo Feedback:
 ${demoFeedback.length > 0 ? demoFeedback.join("\n\n---\n\n") : "- No demos analyzed today"}`;
 
-  const ethanPromptLegacy = `Generate Ethan's EOD brief for ${today}. Ethan is Tony Diaz's AI chief of staff for FlipIQ.
+  const accountabilityPromptLegacy = `Generate ${accountabilityName}'s EOD brief for ${today}. ${accountabilityName} is ${userName}'s accountability partner for FlipIQ.
 
-${ethanDataOnly}
+${accountabilityDataOnly}
 
-Format Ethan's brief with:
-1. Tony's activity summary
-2. Items without due dates (action items for Ethan)
+Format ${accountabilityName}'s brief with:
+1. ${userFirstName}'s activity summary
+2. Items without due dates (action items for ${accountabilityName})
 3. Out-of-sequence alerts
 4. Overrides today
 5. Demo feedback if available
 6. Accountability score: ${completionRate}%
-7. Dynamic action items for Ethan tomorrow`;
+7. Dynamic action items for ${accountabilityName} tomorrow`;
 
   // Helper: same skill ("eod-report") with a recipient meta hint.
   // runtimePrompt = data-only (skill body has format/voice).
@@ -341,31 +348,31 @@ Format Ethan's brief with:
     return block?.type === "text" ? block.text : "";
   }
 
-  let tonyReportText = "";
+  let userReportText = "";
   try {
-    tonyReportText = await generateEodFor("tony", tonyDataOnly, tonyPromptLegacy);
+    userReportText = await generateEodFor("tony", userDataOnly, userPromptLegacy);
   } catch {
-    tonyReportText = `EOD Report — ${today}\n\nCalls: ${callsMade} | Demos: ${demosBooked} | Tasks: ${tasksCompleted}\n\n${callList}`;
+    userReportText = `EOD Report — ${today}\n\nCalls: ${callsMade} | Demos: ${demosBooked} | Tasks: ${tasksCompleted}\n\n${callList}`;
   }
 
-  let ethanReportText = "";
+  let accountabilityReportText = "";
   try {
-    ethanReportText = await generateEodFor("ethan", ethanDataOnly, ethanPromptLegacy);
+    accountabilityReportText = await generateEodFor("ethan", accountabilityDataOnly, accountabilityPromptLegacy);
   } catch {
-    ethanReportText = `Ethan's EOD Brief — ${today}\n\nAccountability: ${completionRate}%\nNo-due-date items: ${noDueDateItems.length}\nOut-of-sequence: ${outOfSequenceItems.length}\nOverrides: ${overridesToday.length}`;
+    accountabilityReportText = `${accountabilityName}'s EOD Brief — ${today}\n\nAccountability: ${completionRate}%\nNo-due-date items: ${noDueDateItems.length}\nOut-of-sequence: ${outOfSequenceItems.length}\nOverrides: ${overridesToday.length}`;
   }
 
-  const tonyResult = await sendEmail({ to: "tony@flipiq.com", subject: `FlipIQ EOD — ${today}`, body: tonyReportText });
-  const ethanResult = await sendEmail({ to: "ethan@flipiq.com", subject: `Ethan's EOD Brief — ${today}`, body: ethanReportText });
+  const userResult = await sendEmail({ to: userEmail, subject: `FlipIQ EOD — ${today}`, body: userReportText });
+  const accountabilityResult = await sendEmail({ to: accountabilityEmail, subject: `${accountabilityName}'s EOD Brief — ${today}`, body: accountabilityReportText });
 
-  const sentTo = [tonyResult.ok ? "tony@flipiq.com" : "", ethanResult.ok ? "ethan@flipiq.com" : ""].filter(Boolean).join(",") || "failed";
+  const sentTo = [userResult.ok ? userEmail : "", accountabilityResult.ok ? accountabilityEmail : ""].filter(Boolean).join(",") || "failed";
 
-  await db
+  await personalDb
     .insert(eodReportsTable)
-    .values({ date: today, callsMade, demosBooked, tasksCompleted, reportText: tonyReportText, sentTo })
+    .values({ date: today, callsMade, demosBooked, tasksCompleted, reportText: userReportText, sentTo })
     .onConflictDoUpdate({
       target: eodReportsTable.date,
-      set: { callsMade, demosBooked, tasksCompleted, reportText: tonyReportText, sentTo },
+      set: { callsMade, demosBooked, tasksCompleted, reportText: userReportText, sentTo },
     });
 
   return { ok: true, alreadySent: false, callsMade, demosBooked, tasksCompleted };

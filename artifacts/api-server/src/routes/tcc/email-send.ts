@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { z } from "zod";
 import { getGmail } from "../../lib/google-auth";
-import { db } from "@workspace/db";
+import { sharedDb } from "@workspace/db";
 import { communicationLogTable, contactsTable } from "../../lib/schema-v2";
 import { eq } from "drizzle-orm";
 import { updateContactComms } from "../../lib/contact-comms";
@@ -22,7 +22,7 @@ async function getGmailSignature(): Promise<string> {
     // Strip HTML tags to get plain text
     return sig.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&nbsp;/g, " ").trim();
   } catch {
-    return "Tony Diaz\nCEO, FlipIQ";
+    return `${process.env.TCC_USER_NAME || "Tony Diaz"}\n${process.env.TCC_USER_ROLE || "CEO"}, FlipIQ`;
   }
 }
 
@@ -58,7 +58,7 @@ router.post("/email/send", async (req, res): Promise<void> => {
 
     const contentType = isHtml ? "text/html" : "text/plain";
     const headers = [
-      `From: Tony Diaz <tony@flipiq.com>`,
+      `From: ${process.env.TCC_USER_NAME || "Tony Diaz"} <${process.env.TCC_USER_EMAIL || "tony@flipiq.com"}>`,
       `To: ${to}`,
       cc ? `Cc: ${cc}` : null,
       bcc ? `Bcc: ${bcc}` : null,
@@ -83,11 +83,11 @@ router.post("/email/send", async (req, res): Promise<void> => {
 
     let contactName = to;
     if (contactId) {
-      const [contact] = await db.select().from(contactsTable).where(eq(contactsTable.id, contactId)).limit(1);
+      const [contact] = await sharedDb.select().from(contactsTable).where(eq(contactsTable.id, contactId)).limit(1);
       if (contact) contactName = contact.name;
     }
 
-    await db.insert(communicationLogTable).values({
+    await sharedDb.insert(communicationLogTable).values({
       contactId: contactId || undefined,
       contactName,
       channel: "email_sent",
@@ -137,19 +137,21 @@ router.post("/email/suggest-draft", async (req, res): Promise<void> => {
     // First name for greetings — derive from contactName, fallback to to-address local part.
     const firstName = (contactName || to.split("@")[0] || recipient).split(/\s+/)[0];
 
-    const systemPrompt = `You are drafting emails on behalf of Tony Diaz, CEO of FlipIQ — a real estate wholesaling and investment platform.
-Tony's writing style: direct, warm, professional, action-oriented. He gets to the point fast and keeps emails short.
+    const userName = process.env.TCC_USER_NAME || "Tony Diaz";
+    const userRole = process.env.TCC_USER_ROLE || "CEO";
+    const systemPrompt = `You are drafting emails on behalf of ${userName}, ${userRole} of FlipIQ — a real estate wholesaling and investment platform.
+${userName}'s writing style: direct, warm, professional, action-oriented. He gets to the point fast and keeps emails short.
 Always greet the recipient with their actual first name; NEVER write placeholder tokens like {firstName}, {name}, or {fullName}.
 You must respond with ONLY a JSON object in this exact format (no markdown, no code fences):
 {"subject":"<subject line>","body":"<email body — use \\n for line breaks, do NOT include a signature>"}`;
 
     const userPrompt = replyToSnippet
-      ? `Draft a reply from Tony to ${recipient} (first name: ${firstName}).
+      ? `Draft a reply from ${userName} to ${recipient} (first name: ${firstName}).
 Original subject: "${subject || "No subject"}"
 Original message snippet: "${replyToSnippet}"
 ${context ? `Additional context: ${context}` : ""}
 Keep it 2-4 sentences. Be warm and direct. Address them as ${firstName} — no placeholder tokens.`
-      : `Draft an email from Tony to ${recipient} (first name: ${firstName}).
+      : `Draft an email from ${userName} to ${recipient} (first name: ${firstName}).
 ${subject ? `Subject hint: "${subject}"` : "Create a clear, compelling subject line."}
 ${context ? `Context/purpose: ${context}` : "Write a general outreach or follow-up email."}
 Keep the body to 3-5 sentences max. Address them as ${firstName} — no placeholder tokens.`;

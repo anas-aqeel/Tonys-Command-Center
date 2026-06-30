@@ -5,7 +5,7 @@
 // sender contact (if matched) + comm log last 6 + email_brain at the time +
 // special-instructions content + time-of-day. Best-effort — partial is OK.
 
-import { db, contactsTable, systemInstructionsTable, communicationLogTable, contactIntelligenceTable } from "@workspace/db";
+import { sharedDb, personalDb, contactsTable, systemInstructionsTable, communicationLogTable, contactIntelligenceTable } from "@workspace/db";
 import { and, eq, desc } from "drizzle-orm";
 
 export async function captureEmailSnapshot(
@@ -24,12 +24,12 @@ export async function captureEmailSnapshot(
   let contact: any = null;
   let intelligence: any = null;
   if (senderEmail) {
-    const [c] = await db.select().from(contactsTable)
+    const [c] = await sharedDb.select().from(contactsTable)
       .where(eq(contactsTable.email, senderEmail))
       .limit(1);
     contact = c || null;
     if (c?.id) {
-      const [i] = await db.select().from(contactIntelligenceTable)
+      const [i] = await sharedDb.select().from(contactIntelligenceTable)
         .where(eq(contactIntelligenceTable.contactId, c.id))
         .limit(1);
       intelligence = i || null;
@@ -39,7 +39,7 @@ export async function captureEmailSnapshot(
   // Last 6 comm log entries for this contact
   let recentComms: any[] = [];
   if (contact?.id) {
-    recentComms = await db.select().from(communicationLogTable)
+    recentComms = await sharedDb.select().from(communicationLogTable)
       .where(eq(communicationLogTable.contactId, contact.id))
       .orderBy(desc(communicationLogTable.loggedAt))
       .limit(6);
@@ -48,7 +48,7 @@ export async function captureEmailSnapshot(
   // Email brain (current learned rules) at the time of feedback
   let emailBrain: string | null = null;
   try {
-    const [b] = await db.select().from(systemInstructionsTable)
+    const [b] = await personalDb.select().from(systemInstructionsTable)
       .where(eq(systemInstructionsTable.section, "email_brain"))
       .limit(1);
     emailBrain = b?.content || null;

@@ -50,10 +50,10 @@ export const TIPS: Record<string, string> = {
   ideas: "Capture ideas. Auto-prioritizes against business plan. Tech → Slack notification.",
   gmail: "Important Emails with reply/snooze/train. FYI (no reply). Badge shows unresolved.",
   snooze: "Removes email until chosen time. Restored from DB on next load.",
-  suggestReply: "AI drafts reply in Tony's voice. You approve and copy.",
+  suggestReply: "AI drafts reply in your voice. You approve and copy.",
   attempt: "Log call attempt. Give follow-up instructions. AI drafts email.",
   connected: "Log outcome, notes, next step, follow-up.",
-  eod: "Generate EOD report and send to tony@flipiq.com and ethan@flipiq.com.",
+  eod: "Generate EOD report and send to configured recipients.",
   chat: "Open AI chat for any question or request.",
 };
 

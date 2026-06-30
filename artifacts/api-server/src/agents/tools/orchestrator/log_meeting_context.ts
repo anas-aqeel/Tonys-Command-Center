@@ -1,10 +1,10 @@
 // log_meeting_context — orchestrator wrapper. Inserts a meeting record.
 
 import type { ToolHandler } from "../index.js";
-import { db, meetingHistoryTable } from "@workspace/db";
+import { sharedDb, meetingHistoryTable } from "@workspace/db";
 
 const handler: ToolHandler = async (input) => {
-  const [row] = await db
+  const [row] = await sharedDb
     .insert(meetingHistoryTable)
     .values({
       date: String(input.date),

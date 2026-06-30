@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { eq, desc, lt } from "drizzle-orm";
 import { z } from "zod";
-import { db, checkinsTable } from "@workspace/db";
+import { personalDb, checkinsTable } from "@workspace/db";
 import { SaveCheckinBody } from "@workspace/api-zod";
 import { todayPacific } from "../../lib/dates.js";
 import { upsertSheetRow } from "../../lib/google-sheets.js";
@@ -61,7 +61,7 @@ const router: IRouter = Router();
 
 router.get("/checkin/today", async (req, res): Promise<void> => {
   const today = todayPacific();
-  const [checkin] = await db
+  const [checkin] = await personalDb
     .select()
     .from(checkinsTable)
     .where(eq(checkinsTable.date, today));
@@ -85,7 +85,7 @@ router.post("/checkin", async (req, res): Promise<void> => {
   const data = parsed.data;
 
   // Use ON CONFLICT DO UPDATE to avoid select-then-insert race condition
-  const [checkin] = await db
+  const [checkin] = await personalDb
     .insert(checkinsTable)
     .values({
       date: today,
@@ -114,7 +114,7 @@ router.post("/checkin", async (req, res): Promise<void> => {
     .returning();
 
   // Pattern analysis: look at last 7 check-ins
-  const recent = await db
+  const recent = await personalDb
     .select()
     .from(checkinsTable)
     .where(lt(checkinsTable.date, today))
@@ -192,7 +192,7 @@ router.post("/checkin", async (req, res): Promise<void> => {
     "",  // notes — column not in schema; placeholder to keep sheet shape stable
   ]).then(rowNum => {
     // Save sheet row number to DB for reference
-    db.update(checkinsTable).set({ sheetRowNumber: rowNum } as any).where(eq(checkinsTable.date, today)).catch(() => {});
+    personalDb.update(checkinsTable).set({ sheetRowNumber: rowNum } as any).where(eq(checkinsTable.date, today)).catch(() => {});
   }).catch(err => req.log.warn({ err }, "[checkin] Sheet upsert failed (non-fatal)"));
 
   res.json({ ...checkin, done: true, patternAlerts: alerts });

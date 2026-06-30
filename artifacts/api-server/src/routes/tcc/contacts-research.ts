@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { z } from "zod";
 import { anthropic, createTrackedMessage } from "@workspace/integrations-anthropic-ai";
-import { db, contactsTable } from "@workspace/db";
+import { sharedDb, contactsTable } from "@workspace/db";
 import { contactIntelligenceTable } from "../../lib/schema-v2";
 import { eq } from "drizzle-orm";
 
@@ -21,8 +21,8 @@ router.post("/contacts/research/check", async (req, res): Promise<void> => {
   const results: { contactId: string; name: string; lastResearchDate: string | null; daysOld: number | null; needsRefresh: boolean }[] = [];
 
   for (const contactId of parsed.data.contactIds) {
-    const [contact] = await db.select().from(contactsTable).where(eq(contactsTable.id, contactId)).limit(1);
-    const [intel] = await db.select().from(contactIntelligenceTable)
+    const [contact] = await sharedDb.select().from(contactsTable).where(eq(contactsTable.id, contactId)).limit(1);
+    const [intel] = await sharedDb.select().from(contactIntelligenceTable)
       .where(eq(contactIntelligenceTable.contactId, contactId)).limit(1);
 
     const lastScan = intel?.lastAiScan;
@@ -67,11 +67,11 @@ router.post("/contacts/research", async (req, res): Promise<void> => {
 
   for (const contactId of parsed.data.contactIds) {
     try {
-      const [contact] = await db.select().from(contactsTable).where(eq(contactsTable.id, contactId)).limit(1);
+      const [contact] = await sharedDb.select().from(contactsTable).where(eq(contactsTable.id, contactId)).limit(1);
       if (!contact) { results.push({ contactId, ok: false, error: "Contact not found" }); continue; }
 
       if (!parsed.data.forceRefresh) {
-        const [intel] = await db.select().from(contactIntelligenceTable)
+        const [intel] = await sharedDb.select().from(contactIntelligenceTable)
           .where(eq(contactIntelligenceTable.contactId, contactId)).limit(1);
         if (intel?.lastAiScan) {
           const daysOld = Math.floor((Date.now() - new Date(intel.lastAiScan).getTime()) / (1000 * 60 * 60 * 24));
@@ -138,7 +138,7 @@ SOCIAL_PROFILES: [Any other social media URLs found]`,
         socialProfiles.linkedin = linkedinUrl;
       }
 
-      const [existing] = await db.select({ id: contactIntelligenceTable.id })
+      const [existing] = await sharedDb.select({ id: contactIntelligenceTable.id })
         .from(contactIntelligenceTable)
         .where(eq(contactIntelligenceTable.contactId, contactId)).limit(1);
 
@@ -152,10 +152,10 @@ SOCIAL_PROFILES: [Any other social media URLs found]`,
       };
 
       if (existing) {
-        await db.update(contactIntelligenceTable).set(updates)
+        await sharedDb.update(contactIntelligenceTable).set(updates)
           .where(eq(contactIntelligenceTable.contactId, contactId));
       } else {
-        await db.insert(contactIntelligenceTable).values({ contactId, ...updates });
+        await sharedDb.insert(contactIntelligenceTable).values({ contactId, ...updates });
       }
 
       results.push({

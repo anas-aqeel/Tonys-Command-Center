@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, ideasTable } from "@workspace/db";
+import { personalDb, sharedDb, ideasTable } from "@workspace/db";
 import { ParkIdeaBody } from "@workspace/api-zod";
 import { desc, eq } from "drizzle-orm";
 import { anthropic, createTrackedMessage } from "@workspace/integrations-anthropic-ai";
@@ -14,7 +14,7 @@ import { runAgent } from "../../agents/runtime.js";
 const router: IRouter = Router();
 
 async function getBusinessContext(): Promise<string> {
-  const rows = await db.select().from(businessContextTable).limit(5);
+  const rows = await sharedDb.select().from(businessContextTable).limit(5);
   if (!rows.length) return "";
   return rows.map(r => `[${r.documentType}] ${r.summary || r.content?.substring(0, 300) || ""}`.trim()).join("\n");
 }
@@ -29,7 +29,7 @@ async function getBusinessContext(): Promise<string> {
 router.get("/ideas/team-members", async (_req, res): Promise<void> => {
   try {
     const [teamRoles, linearMembers, slackResult] = await Promise.allSettled([
-      db.select().from(teamRolesTable).orderBy(teamRolesTable.position),
+      sharedDb.select().from(teamRolesTable).orderBy(teamRolesTable.position),
       getLinearMembers(),
       listSlackUsers(),
     ]);
@@ -233,7 +233,7 @@ const ClassifyIdeaBody = z.object({
 });
 
 router.get("/ideas", async (req, res): Promise<void> => {
-  const ideas = await db.select().from(ideasTable).orderBy(desc(ideasTable.createdAt));
+  const ideas = await personalDb.select().from(ideasTable).orderBy(desc(ideasTable.createdAt));
   res.json(ideas);
 });
 
@@ -246,7 +246,7 @@ router.post("/ideas/classify", async (req, res): Promise<void> => {
   }
 
   const { text } = parsed.data;
-  const recentIdeas = await db.select().from(ideasTable).orderBy(desc(ideasTable.createdAt)).limit(5);
+  const recentIdeas = await personalDb.select().from(ideasTable).orderBy(desc(ideasTable.createdAt)).limit(5);
 
   const VALID_CATS = ["Tech", "Sales", "Marketing", "Strategic Partners", "Operations", "Product", "Personal"] as const;
   const VALID_URG = ["Now", "This Week", "This Month", "Someday"] as const;
@@ -304,7 +304,7 @@ router.post("/ideas/classify", async (req, res): Promise<void> => {
   let pushback: { message: string; priorityRank: number | null; action: "park" | "override" | "escalate" | null } | null = null;
 
   try {
-    const contextDocs = await db.select().from(businessContextTable);
+    const contextDocs = await sharedDb.select().from(businessContextTable);
     const northStar = contextDocs.find(d => d.documentType === "north_star")?.content || "";
     const businessPlan = contextDocs.find(d => d.documentType === "business_plan")?.content || "";
     const ninetyDayPlan = contextDocs.find(d => d.documentType === "90_day_plan")?.content || "";
@@ -388,7 +388,7 @@ router.post("/ideas/classify", async (req, res): Promise<void> => {
   let additionalContext: string | null = null;
   if (classification.techType === "Task") {
     try {
-      const ninetyDayDoc = await db.select().from(businessContextTable).limit(10);
+      const ninetyDayDoc = await sharedDb.select().from(businessContextTable).limit(10);
       const plan = ninetyDayDoc.find(d => d.documentType === "90_day_plan");
       if (plan?.content) {
         additionalContext = `This idea was classified as a "Task". It has been checked against your 90-day plan:\n${plan.content.substring(0, 1500)}`;
@@ -432,8 +432,8 @@ router.post("/ideas/notify-park", async (req, res): Promise<void> => {
   } catch (err) { console.error("[ideas/notify-park] recordFeedback failed:", err); }
 
   try {
-    const slackText = `*Idea Parked by Tony*\n\n> ${text || "Untitled idea"}\n\n*Category:* ${category || "—"}\n*Urgency:* ${urgency || "—"}`;
-    const r = await postSlackMessage({ channel: "U0991BD321Y", text: slackText });
+    const slackText = `*Idea Parked by ${(process.env.TCC_USER_NAME || "Tony").split(/\s+/)[0]}*\n\n> ${text || "Untitled idea"}\n\n*Category:* ${category || "—"}\n*Urgency:* ${urgency || "—"}`;
+    const r = await postSlackMessage({ channel: process.env.TCC_ACCOUNTABILITY_SLACK_ID || "U0991BD321Y", text: slackText });
     res.json({ ok: true, slackOk: r.ok, feedback_id: feedbackId });
   } catch (err) {
     console.warn("[ideas/notify-park] Slack DM failed:", err instanceof Error ? err.message : err);
@@ -462,7 +462,7 @@ router.post("/ideas/notify-override", async (req, res): Promise<void> => {
   // Q1 (uniform): post to #engineering channel AND DM Ethan directly so every
   // variant has a consistent personal notification surface. Tony explicitly
   // wants the DM even though Ethan is also in the channel.
-  const slackText = `*Priority Override Alert*\n\nTony overrode the 90-day plan to prioritize:\n> ${text || "Unknown idea"}\n\n*Justification:* ${justification || "No justification provided"}`;
+  const slackText = `*Priority Override Alert*\n\n${(process.env.TCC_USER_NAME || "Tony").split(/\s+/)[0]} overrode the 90-day plan to prioritize:\n> ${text || "Unknown idea"}\n\n*Justification:* ${justification || "No justification provided"}`;
   let channelOk = false;
   let dmOk = false;
   try {
@@ -470,7 +470,7 @@ router.post("/ideas/notify-override", async (req, res): Promise<void> => {
     channelOk = true;
   } catch { /* keep going to DM */ }
   try {
-    await postSlackMessage({ channel: "U0991BD321Y", text: slackText });
+    await postSlackMessage({ channel: process.env.TCC_ACCOUNTABILITY_SLACK_ID || "U0991BD321Y", text: slackText });
     dmOk = true;
   } catch { /* swallow */ }
   res.json({ ok: true, channelOk, dmOk, feedback_id: feedbackId });
@@ -520,8 +520,8 @@ router.post("/ideas/escalate-to-ethan", async (req, res): Promise<void> => {
   // ── Slack notification (fire even if calendar booking fails) ───────────────
   try {
     const r = await postSlackMessage({
-      channel: "U0991BD321Y",
-      text: `*Idea Parked + Meeting Requested*\n\nTony submitted an idea that was flagged as out-of-scope and auto-parked:\n> ${text || ""}\n\nPlease schedule a meeting to discuss if this should be prioritized.`,
+      channel: process.env.TCC_ACCOUNTABILITY_SLACK_ID || "U0991BD321Y",
+      text: `*Idea Parked + Meeting Requested*\n\n${(process.env.TCC_USER_NAME || "Tony").split(/\s+/)[0]} submitted an idea that was flagged as out-of-scope and auto-parked:\n> ${text || ""}\n\nPlease schedule a meeting to discuss if this should be prioritized.`,
     });
     slackOk = r.ok;
   } catch {
@@ -553,12 +553,15 @@ router.post("/ideas/escalate-to-ethan", async (req, res): Promise<void> => {
       throw new Error("Invalid meetingStart/meetingEnd ISO timestamps");
     }
 
+    const accountabilityEmail = process.env.TCC_ACCOUNTABILITY_EMAIL || "ethan@flipiq.com";
+    const accountabilityName = accountabilityEmail.split("@")[0].replace(/^\w/, c => c.toUpperCase());
+    const ideaUserName = (process.env.TCC_USER_NAME || "Tony").split(/\s+/)[0];
     await createEvent({
-      summary: `Review plan change with Ethan — "${(text || "").substring(0, 50)}"`,
+      summary: `Review plan change with ${accountabilityName} — "${(text || "").substring(0, 50)}"`,
       start: startDate.toISOString(),
       end: endDate.toISOString(),
-      attendees: ["ethan@flipiq.com"],
-      description: `Tony submitted: "${text}"\nAI priority: #${rank || "unknown"}\nTony's reasoning: "${reasoning || "Auto-parked, no justification"}"`,
+      attendees: [accountabilityEmail],
+      description: `${ideaUserName} submitted: "${text}"\nAI priority: #${rank || "unknown"}\n${ideaUserName}'s reasoning: "${reasoning || "Auto-parked, no justification"}"`,
     });
     calendarOk = true;
     scheduledStart = startDate.toISOString();
@@ -671,10 +674,10 @@ router.post("/ideas", async (req, res): Promise<void> => {
 
   const { text, category, urgency, techType, assigneeName, assigneeEmail, dueDate, aiReflection } = parsed.data;
 
-  const existingIdeas = await db.select().from(ideasTable).orderBy(desc(ideasTable.createdAt));
+  const existingIdeas = await personalDb.select().from(ideasTable).orderBy(desc(ideasTable.createdAt));
   const priorityPosition = existingIdeas.length + 1;
 
-  const [idea] = await db
+  const [idea] = await personalDb
     .insert(ideasTable)
     .values({
       text,
@@ -704,7 +707,7 @@ router.post("/ideas", async (req, res): Promise<void> => {
       if (linearIssue.ok) {
         req.log.info({ identifier: linearIssue.identifier }, "Created Linear issue");
         if (linearIssue.identifier) {
-          await db.update(ideasTable).set({ linearIdentifier: linearIssue.identifier }).where(eq(ideasTable.id, idea.id)).catch(() => {});
+          await personalDb.update(ideasTable).set({ linearIdentifier: linearIssue.identifier }).where(eq(ideasTable.id, idea.id)).catch(() => {});
         }
       }
     } catch (err) {
@@ -835,7 +838,7 @@ router.patch("/ideas/:id", async (req, res): Promise<void> => {
   if ("aiReflection" in body) updateFields.aiReflection = body.aiReflection ? String(body.aiReflection) : null;
 
   try {
-    const [updated] = await db.update(ideasTable).set(updateFields).where(eq(ideasTable.id, id)).returning();
+    const [updated] = await personalDb.update(ideasTable).set(updateFields).where(eq(ideasTable.id, id)).returning();
     if (!updated) { res.status(404).json({ error: "Idea not found" }); return; }
     res.json(updated);
   } catch (err) {
@@ -847,7 +850,7 @@ router.patch("/ideas/:id", async (req, res): Promise<void> => {
 router.delete("/ideas/:id", async (req, res): Promise<void> => {
   const { id } = req.params;
   try {
-    const [deleted] = await db.delete(ideasTable).where(eq(ideasTable.id, id)).returning({ id: ideasTable.id });
+    const [deleted] = await personalDb.delete(ideasTable).where(eq(ideasTable.id, id)).returning({ id: ideasTable.id });
     if (!deleted) { res.status(404).json({ error: "Idea not found" }); return; }
     res.json({ ok: true, id: deleted.id });
   } catch (err) {
@@ -894,7 +897,7 @@ function buildReflectionSummary(idea: typeof ideasTable.$inferSelect): string {
 router.post("/ideas/:id/notify-assignee-slack", async (req, res): Promise<void> => {
   const { id } = req.params;
   try {
-    const [idea] = await db.select().from(ideasTable).where(eq(ideasTable.id, id)).limit(1);
+    const [idea] = await personalDb.select().from(ideasTable).where(eq(ideasTable.id, id)).limit(1);
     if (!idea) { res.status(404).json({ ok: false, error: "Idea not found" }); return; }
     if (!idea.assigneeName && !idea.assigneeEmail) {
       res.status(400).json({ ok: false, error: "no_assignee" });
@@ -904,7 +907,7 @@ router.post("/ideas/:id/notify-assignee-slack", async (req, res): Promise<void> 
     // Try team_roles match (canonical Slack ID). Match name first (exact),
     // then email (case-insensitive). Fall back to a Slack workspace lookup
     // by display-name/email so users not yet in team_roles still notify.
-    const roles = await db.select().from(teamRolesTable);
+    const roles = await sharedDb.select().from(teamRolesTable);
     const byName = roles.find(r => idea.assigneeName && r.name.toLowerCase() === idea.assigneeName.toLowerCase());
     const byEmail = idea.assigneeEmail
       ? roles.find(r => r.email && r.email.toLowerCase() === idea.assigneeEmail!.toLowerCase())
@@ -949,7 +952,7 @@ router.post("/ideas/:id/notify-assignee-slack", async (req, res): Promise<void> 
 router.post("/ideas/:id/notify-assignee-email", async (req, res): Promise<void> => {
   const { id } = req.params;
   try {
-    const [idea] = await db.select().from(ideasTable).where(eq(ideasTable.id, id)).limit(1);
+    const [idea] = await personalDb.select().from(ideasTable).where(eq(ideasTable.id, id)).limit(1);
     if (!idea) { res.status(404).json({ ok: false, error: "Idea not found" }); return; }
     if (!idea.assigneeEmail) {
       res.status(400).json({ ok: false, error: "no_email" });
@@ -989,17 +992,17 @@ router.post("/ideas/:id/notify-assignee-email", async (req, res): Promise<void> 
 router.post("/ideas/:id/rethink", async (req, res): Promise<void> => {
   const { id } = req.params;
   try {
-    const [idea] = await db.select().from(ideasTable).where(eq(ideasTable.id, id)).limit(1);
+    const [idea] = await personalDb.select().from(ideasTable).where(eq(ideasTable.id, id)).limit(1);
     if (!idea) { res.status(404).json({ error: "Idea not found" }); return; }
 
     // Re-classify using the same AI flow
-    const recentIdeas = await db.select().from(ideasTable).orderBy(desc(ideasTable.createdAt)).limit(5);
+    const recentIdeas = await personalDb.select().from(ideasTable).orderBy(desc(ideasTable.createdAt)).limit(5);
     const classification = await classifyIdea(idea.text, recentIdeas);
 
     // Update idea with new classification — persist the full reflection
     // JSON too so the drawer's AI tab can re-show it without re-running
     // the classifier on every reopen.
-    const [updated] = await db.update(ideasTable).set({
+    const [updated] = await personalDb.update(ideasTable).set({
       category: classification.category,
       urgency: classification.urgency,
       techType: classification.techType || null,

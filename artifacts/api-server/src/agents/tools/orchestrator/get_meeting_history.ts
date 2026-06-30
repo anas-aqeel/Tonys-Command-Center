@@ -1,13 +1,13 @@
 // get_meeting_history — orchestrator wrapper. Reads past meeting notes for a contact.
 
 import type { ToolHandler } from "../index.js";
-import { db, meetingHistoryTable } from "@workspace/db";
+import { sharedDb, meetingHistoryTable } from "@workspace/db";
 import { ilike, desc } from "drizzle-orm";
 
 const handler: ToolHandler = async (input) => {
   const name = String(input.contact_name);
   const lim = typeof input.limit === "number" ? Math.min(input.limit, 20) : 5;
-  const rows = await db
+  const rows = await sharedDb
     .select()
     .from(meetingHistoryTable)
     .where(ilike(meetingHistoryTable.contactName, `%${name}%`))

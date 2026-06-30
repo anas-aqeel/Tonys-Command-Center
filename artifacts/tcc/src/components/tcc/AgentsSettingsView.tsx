@@ -708,7 +708,7 @@ function MemoryTab({ agent }: { agent: string }) {
     setSaving(true);
     setError("");
     try {
-      await put(`/agents/${agent}/memory/${section}?kind=${encodeURIComponent(kind)}`, { content, updated_by: "tony" });
+      await put(`/agents/${agent}/memory/${section}?kind=${encodeURIComponent(kind)}`, { content, updated_by: (import.meta.env.VITE_USER_NAME || "tony").split(" ")[0].toLowerCase() });
       setOriginalContent(content);
       await loadList();
     } catch (err) {

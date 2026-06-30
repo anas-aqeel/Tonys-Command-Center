@@ -9,7 +9,7 @@
 import { Router, type IRouter } from "express";
 import { and, asc, eq } from "drizzle-orm";
 import { z } from "zod";
-import { db } from "@workspace/db";
+import { personalDb, sharedDb } from "@workspace/db";
 import { aiProviderSettingsTable, modelCatalogTable } from "../../lib/schema-v2";
 import {
   encryptKey,
@@ -55,7 +55,7 @@ function publicRow(row: typeof aiProviderSettingsTable.$inferSelect): PublicRow 
 }
 
 router.get("/ai-settings", async (_req, res): Promise<void> => {
-  const rows = await db.select().from(aiProviderSettingsTable);
+  const rows = await personalDb.select().from(aiProviderSettingsTable);
   // Order canonically: basic, medium, complex.
   const order: Record<string, number> = { basic: 0, medium: 1, complex: 2 };
   rows.sort((a, b) => (order[a.tier] ?? 99) - (order[b.tier] ?? 99));
@@ -120,7 +120,7 @@ router.patch("/ai-settings/:tier", async (req, res): Promise<void> => {
     }
   }
 
-  const [row] = await db
+  const [row] = await personalDb
     .update(aiProviderSettingsTable)
     .set(updates)
     .where(eq(aiProviderSettingsTable.tier, tier))
@@ -158,7 +158,7 @@ router.post("/ai-settings/:tier/test", async (req, res): Promise<void> => {
   if (!apiKey) {
     // Pull saved key from DB (decrypt) — this is a "test currently saved" path.
     const { decryptKey } = await import("@workspace/integrations-anthropic-ai");
-    const [row] = await db
+    const [row] = await personalDb
       .select()
       .from(aiProviderSettingsTable)
       .where(eq(aiProviderSettingsTable.tier, tier));
@@ -205,7 +205,7 @@ router.get("/ai-settings/models", async (req, res): Promise<void> => {
     res.status(400).json({ error: `provider must be one of ${SUPPORTED_PROVIDERS.join(", ")}` });
     return;
   }
-  const rows = await db
+  const rows = await sharedDb
     .select()
     .from(modelCatalogTable)
     .where(eq(modelCatalogTable.provider, provider))

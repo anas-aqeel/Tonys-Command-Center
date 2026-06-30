@@ -3,16 +3,16 @@
 // note #5). Preserved as-is.
 
 import type { ToolHandler } from "../index.js";
-import { db, contactsTable } from "@workspace/db";
+import { sharedDb, contactsTable } from "@workspace/db";
 import { communicationLogTable } from "../../../lib/schema-v2.js";
 import { eq, ilike, desc } from "drizzle-orm";
 
 const handler: ToolHandler = async (input) => {
   try {
     const lim = typeof input.limit === "number" ? Math.min(input.limit, 50) : 20;
-    let query = db.select().from(communicationLogTable);
+    let query = sharedDb.select().from(communicationLogTable);
     if (input.contact_name) {
-      const [contact] = await db.select().from(contactsTable)
+      const [contact] = await sharedDb.select().from(contactsTable)
         .where(ilike(contactsTable.name, `%${String(input.contact_name)}%`)).limit(1);
       if (contact) {
         // @ts-ignore dynamic where

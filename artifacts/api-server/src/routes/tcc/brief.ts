@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { eq, gte, ilike, desc as descOrder, sql as sqlExpr, inArray } from "drizzle-orm";
-import { db, dailyBriefsTable, businessContextTable, checkinsTable, taskCompletionsTable, callLogTable, contactsTable, sectionCacheTable, slackMentionsAckedTable } from "@workspace/db";
+import { sharedDb, personalDb, dailyBriefsTable, businessContextTable, checkinsTable, taskCompletionsTable, callLogTable, contactsTable, sectionCacheTable, slackMentionsAckedTable } from "@workspace/db";
 import { communicationLogTable, contactIntelligenceTable } from "../../lib/schema-v2.js";
 import { anthropic, createTrackedMessage } from "@workspace/integrations-anthropic-ai";
 import { isAgentRuntimeEnabled } from "../../agents/flags.js";
@@ -212,9 +212,9 @@ Each item shape: { "from": string, "subj": string, "why": string, "time": string
       const claudeResponse = await createTrackedMessage("brief_email_triage", {
         model: "claude-haiku-4-5",
         max_tokens: 4096,
-        system: `You are Tony Diaz's email triage assistant for FlipIQ (real estate wholesaling).
+        system: `You are ${process.env.TCC_USER_NAME || "Tony Diaz"}'s email triage assistant for FlipIQ (real estate wholesaling).
 Classify each email into exactly 3 categories: "important", "fyi", or "promotions".
-Important: from @flipiq.com team, known contacts (chris.wesser, ethan, ramy, marisol, cesar@eoslab), or keywords: urgent, contract, payment, demo, equity, funding, deal.
+Important: from @${process.env.TCC_EMAIL_DOMAIN || "flipiq.com"} team, known contacts, or keywords: urgent, contract, payment, demo, equity, funding, deal.
 FYI: medical, receipts, real-person notifications, updates that are relevant but need no reply.
 Promotions: newsletters, marketing emails, automated notifications, social media, promotional offers.
 For important: extract from, subj, why (1 short sentence on WHY it needs action), time (friendly: Today/Yesterday/date), p (high/med/low).
@@ -351,9 +351,9 @@ async function fetchLiveCalendar(): Promise<CalItem[] | null> {
           const attendeeEmails: string[] = (e.attendees as any[])
             .filter((a) => a.email && a.responseStatus !== "declined")
             .map((a) => (a.email as string).toLowerCase())
-            .filter((email) => !email.endsWith("@flipiq.com") && !email.includes("tdiaz"));
+            .filter((email) => !email.endsWith(`@${process.env.TCC_EMAIL_DOMAIN || "flipiq.com"}`) && email !== (process.env.TCC_USER_EMAIL || "tony@flipiq.com").toLowerCase());
           if (attendeeEmails.length > 0) {
-            const matches = await db
+            const matches = await sharedDb
               .select({
                 name: contactsTable.name,
                 company: contactsTable.company,
@@ -413,8 +413,9 @@ async function fetchLiveSlack(): Promise<SlackItem[] | null> {
       for (const ch of targets.slice(0, 5)) {
         const hist = await getSlackChannelHistory({ channel: ch.id, limit: 30 });
         if (!hist.ok) continue;
+        const userSlackId = process.env.TCC_USER_SLACK_ID || "U0991BAS0TC";
         const mentions = (hist.messages || []).filter(m =>
-          m.text?.includes("<@U0991BAS0TC>") || m.text?.includes("@here") || m.text?.includes("@channel")
+          m.text?.includes(`<@${userSlackId}>`) || m.text?.includes("@here") || m.text?.includes("@channel")
         );
         for (const m of mentions.slice(0, 2)) {
           items.push({
@@ -463,7 +464,7 @@ async function fetchLiveSlack(): Promise<SlackItem[] | null> {
     // D2 (Tony's 2026-05-16): drop mentions Tony has already acked. The ack
     // table is small + queried by ts (primary key), so look up the full set
     // of acked-ts in one query and filter in-memory.
-    const ackedTsSet = await db.select({ ts: slackMentionsAckedTable.ts })
+    const ackedTsSet = await personalDb.select({ ts: slackMentionsAckedTable.ts })
       .from(slackMentionsAckedTable)
       .then(rows => new Set(rows.map(r => r.ts)))
       .catch(() => new Set<string>());
@@ -566,13 +567,11 @@ async function generateClaudeBrief(
       ? linearData.map(i => `[${i.id}] ${i.task} (${i.level} priority)`).join("\n")
       : "No open Linear issues";
 
-    const dailySystem = `You generate Tony Diaz's daily brief. He is CEO of FlipIQ (AI-powered real estate wholesaling SaaS).
-Team: Ethan Jolly (CTO), Ramy (ops), Marisol (ops coordinator), Faisal (lead engineer), Haris (engineer), Chris Wesser (legal/capital raise).
-Key contacts: Fernando Perez (deal source), Mike Oyoque, Xander Clemens (Family Office Club — 10K investors), Kyle Draper.
+    const dailySystem = `You generate ${process.env.TCC_USER_NAME || "Tony Diaz"}'s daily brief. He is ${process.env.TCC_USER_ROLE || "CEO"} of FlipIQ (AI-powered real estate wholesaling SaaS).
 FlipIQ focuses on: AI deal analysis, comps, wholesaling pipeline, investor outreach, capital raise ($500K-$2M round).
-Today is ${todayFormatted}. Generate realistic workday data — no placeholders, no fake names outside this cast.`;
+Today is ${todayFormatted}. Generate realistic workday data — no placeholders.`;
 
-    const dailyUserPrompt = `Generate Tony's daily brief based on his REAL calendar and open tasks:
+    const dailyUserPrompt = `Generate ${(process.env.TCC_USER_NAME || "Tony").split(/\s+/)[0]}'s daily brief based on his REAL calendar and open tasks:
 
 CALENDAR TODAY:
 ${calContext}
@@ -665,7 +664,7 @@ async function briefTodayHandler(
   const forceRefreshTasks    = refreshSet.has("ai");
 
   // Step 1: Load today's cached brief from DB (tasks are user-editable so always respect them)
-  const [dbBrief] = await db
+  const [dbBrief] = await personalDb
     .select()
     .from(dailyBriefsTable)
     .where(eq(dailyBriefsTable.date, today));
@@ -731,17 +730,17 @@ async function briefTodayHandler(
     const enriched = await Promise.all(emailsImportant.map(async (email) => {
       try {
         const senderName = email.from.split("<")[0].trim();
-        const [contact] = await db.select().from(contactsTable)
+        const [contact] = await sharedDb.select().from(contactsTable)
           .where(ilike(contactsTable.name, `%${senderName}%`)).limit(1);
         if (!contact) return email;
 
-        const [countRow] = await db.select({ total: sqlExpr<number>`count(*)` })
+        const [countRow] = await sharedDb.select({ total: sqlExpr<number>`count(*)` })
           .from(communicationLogTable)
           .where(eq(communicationLogTable.contactId, contact.id));
         const total = Number(countRow?.total ?? 0);
         if (total === 0) return email;
 
-        const [lastComm] = await db.select()
+        const [lastComm] = await sharedDb.select()
           .from(communicationLogTable)
           .where(eq(communicationLogTable.contactId, contact.id))
           .orderBy(descOrder(communicationLogTable.loggedAt))
@@ -802,7 +801,7 @@ async function briefTodayHandler(
       updateSet.tasks = tasks;
     }
 
-    await db.insert(dailyBriefsTable)
+    await personalDb.insert(dailyBriefsTable)
       .values({
         date: today,
         calendarData,
@@ -876,7 +875,7 @@ async function readCache(section: SectionName): Promise<{
   aiProcessedAt: Date | null;
 } | null> {
   try {
-    const [row] = await db.select().from(sectionCacheTable).where(eq(sectionCacheTable.section, section));
+    const [row] = await personalDb.select().from(sectionCacheTable).where(eq(sectionCacheTable.section, section));
     if (!row) return null;
     return { data: row.data, fetchedAt: row.fetchedAt, aiProcessedAt: row.aiProcessedAt };
   } catch (err) {
@@ -894,7 +893,7 @@ export async function writeCache(
   const setOnUpdate: Record<string, unknown> = { data, fetchedAt: now, updatedAt: now };
   if (opts.bumpAi) setOnUpdate.aiProcessedAt = now;
   try {
-    await db.insert(sectionCacheTable).values({
+    await personalDb.insert(sectionCacheTable).values({
       section,
       data: data as object,
       fetchedAt: now,
@@ -1026,7 +1025,7 @@ router.post("/brief/slack/mentions/:ts/ack", async (req, res): Promise<void> => 
   if (!channelId) { res.status(400).json({ error: "channelId required" }); return; }
 
   try {
-    await db.insert(slackMentionsAckedTable)
+    await personalDb.insert(slackMentionsAckedTable)
       .values({ ts, channelId })
       .onConflictDoNothing();
     // Also drop from the section cache so the next /brief/slack read doesn't
@@ -1189,14 +1188,14 @@ router.get("/brief/spiritual-anchor", async (req, res): Promise<void> => {
   const yesterdayStr = yesterday.toISOString().split("T")[0];
 
   try {
-    const [spiritualCtx] = await db
+    const [spiritualCtx] = await sharedDb
       .select()
       .from(businessContextTable)
       .where(eq(businessContextTable.documentType, "daily_spiritual"))
       .limit(1);
 
     // Gap 1: Fetch last 5 check-ins for Bible engagement trend
-    const last5Checkins = await db
+    const last5Checkins = await personalDb
       .select()
       .from(checkinsTable)
       .orderBy(descOrder(checkinsTable.date))
@@ -1204,7 +1203,7 @@ router.get("/brief/spiritual-anchor", async (req, res): Promise<void> => {
     const missedBible = last5Checkins.filter(c => !c.bible).length;
     const engagementLevel = missedBible >= 3 ? "low" : missedBible >= 1 ? "moderate" : "strong";
 
-    const [yesterdayCk] = await db
+    const [yesterdayCk] = await personalDb
       .select()
       .from(checkinsTable)
       .where(eq(checkinsTable.date, yesterdayStr));
@@ -1212,12 +1211,12 @@ router.get("/brief/spiritual-anchor", async (req, res): Promise<void> => {
     const yesterdayStart = new Date(yesterdayStr + "T00:00:00Z");
     const yesterdayEnd = new Date(yesterdayStr + "T23:59:59Z");
 
-    const yesterdayTasks = await db
+    const yesterdayTasks = await personalDb
       .select()
       .from(taskCompletionsTable)
       .where(gte(taskCompletionsTable.completedAt, yesterdayStart));
 
-    const yesterdayCallsRaw = await db
+    const yesterdayCallsRaw = await sharedDb
       .select()
       .from(callLogTable)
       .where(gte(callLogTable.createdAt, yesterdayStart));
@@ -1241,17 +1240,18 @@ router.get("/brief/spiritual-anchor", async (req, res): Promise<void> => {
       bibleYesterday ? "Bible ✓" : null,
     ].filter(Boolean).join(", ");
 
+    const briefUserFirstName = (process.env.TCC_USER_NAME || "Tony").split(/\s+/)[0];
     const engagementNote = engagementLevel === "low"
-      ? `Tony's spiritual engagement: LOW (Bible missed ${missedBible} of last ${last5Checkins.length} days). Be direct — not preachy, not soft. Call this out briefly and push him to restart the habit today.`
+      ? `${briefUserFirstName}'s spiritual engagement: LOW (Bible missed ${missedBible} of last ${last5Checkins.length} days). Be direct — not preachy, not soft. Call this out briefly and push him to restart the habit today.`
       : engagementLevel === "moderate"
-      ? `Tony's spiritual engagement: MODERATE (Bible missed ${missedBible} of last ${last5Checkins.length} days). Acknowledge the inconsistency briefly, encourage getting back on track.`
-      : `Tony's spiritual engagement: STRONG (Bible read consistently). Affirm this briefly.`;
+      ? `${briefUserFirstName}'s spiritual engagement: MODERATE (Bible missed ${missedBible} of last ${last5Checkins.length} days). Acknowledge the inconsistency briefly, encourage getting back on track.`
+      : `${briefUserFirstName}'s spiritual engagement: STRONG (Bible read consistently). Affirm this briefly.`;
 
-    const userPrompt = `You are Tony Diaz's morning AI coach. Generate a SHORT (3-4 sentences max) morning spiritual anchor message.
+    const userPrompt = `You are ${process.env.TCC_USER_NAME || "Tony Diaz"}'s morning AI coach. Generate a SHORT (3-4 sentences max) morning spiritual anchor message.
 
 Today is ${new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "America/Los_Angeles" })}.
 
-Tony's spiritual content / Daily Task doc:
+${briefUserFirstName}'s spiritual content / Daily Task doc:
 ${spiritualContent.slice(0, 1200)}
 
 Yesterday's performance: ${perfSummary || "no data yet"}

@@ -2,13 +2,13 @@
 // optionally filtered by horizon/owner/status, grouped by horizon order.
 
 import type { ToolHandler } from "../index.js";
-import { db } from "@workspace/db";
+import { sharedDb } from "@workspace/db";
 import { companyGoalsTable } from "../../../lib/schema-v2.js";
 import { asc } from "drizzle-orm";
 
 const handler: ToolHandler = async (input) => {
   try {
-    const goals = await db.select().from(companyGoalsTable)
+    const goals = await sharedDb.select().from(companyGoalsTable)
       .orderBy(asc(companyGoalsTable.position), asc(companyGoalsTable.createdAt));
     let filtered = goals;
     if (input.horizon) filtered = filtered.filter((g: typeof goals[0]) => g.horizon === String(input.horizon));

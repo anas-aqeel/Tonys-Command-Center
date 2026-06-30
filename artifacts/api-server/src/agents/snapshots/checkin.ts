@@ -1,6 +1,6 @@
 // Checkin feedback snapshot — for guilt-trip "did this land?" thumbs feedback.
 
-import { db, checkinsTable } from "@workspace/db";
+import { personalDb, checkinsTable } from "@workspace/db";
 import { eq, desc } from "drizzle-orm";
 
 export async function captureCheckinSnapshot(
@@ -12,19 +12,19 @@ export async function captureCheckinSnapshot(
   let checkin: any = null;
 
   if (sourceId && /^[0-9a-f-]{36}$/i.test(sourceId)) {
-    const [c] = await db.select().from(checkinsTable)
+    const [c] = await personalDb.select().from(checkinsTable)
       .where(eq(checkinsTable.id, sourceId))
       .limit(1);
     checkin = c || null;
   } else if (sourceId && /^\d{4}-\d{2}-\d{2}$/.test(sourceId)) {
-    const [c] = await db.select().from(checkinsTable)
+    const [c] = await personalDb.select().from(checkinsTable)
       .where(eq(checkinsTable.date, sourceId))
       .limit(1);
     checkin = c || null;
   }
 
   // Last 5 checkins for streak context
-  const recentCheckins = await db.select({
+  const recentCheckins = await personalDb.select({
     date: checkinsTable.date,
     bedtime: checkinsTable.bedtime,
     sleep_hours: checkinsTable.sleepHours,

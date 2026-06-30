@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db } from "@workspace/db";
+import { sharedDb } from "@workspace/db";
 import { eq, asc, desc, and } from "drizzle-orm";
 import { companyGoalsTable, teamRolesTable, goalCompletionsTable, businessContextTable } from "../../lib/schema-v2";
 import { getSheetValues, getSheetsClient } from "../../lib/google-sheets";
@@ -15,7 +15,7 @@ const HORIZON_ORDER = ["5yr", "1yr", "quarterly", "monthly", "weekly", "daily"];
 router.get("/business/goals", async (req, res): Promise<void> => {
   try {
     const { horizon, owner, status } = req.query;
-    const goals = await db.select().from(companyGoalsTable)
+    const goals = await sharedDb.select().from(companyGoalsTable)
       .orderBy(asc(companyGoalsTable.position), asc(companyGoalsTable.createdAt));
     let filtered = goals;
     if (horizon) filtered = filtered.filter(g => g.horizon === horizon);
@@ -29,7 +29,7 @@ router.get("/business/goals", async (req, res): Promise<void> => {
 
 router.get("/business/goals/by-horizon", async (_req, res): Promise<void> => {
   try {
-    const goals = await db.select().from(companyGoalsTable)
+    const goals = await sharedDb.select().from(companyGoalsTable)
       .orderBy(asc(companyGoalsTable.position), asc(companyGoalsTable.createdAt));
     const grouped: Record<string, typeof goals> = {};
     for (const h of HORIZON_ORDER) grouped[h] = [];
@@ -47,7 +47,7 @@ router.get("/business/goals/by-horizon", async (_req, res): Promise<void> => {
 router.get("/business/goals/:horizon", async (req, res): Promise<void> => {
   try {
     const { horizon } = req.params;
-    const goals = await db.select().from(companyGoalsTable)
+    const goals = await sharedDb.select().from(companyGoalsTable)
       .where(eq(companyGoalsTable.horizon, horizon))
       .orderBy(asc(companyGoalsTable.position), asc(companyGoalsTable.createdAt));
     res.json(goals);
@@ -60,8 +60,8 @@ router.post("/business/goals", async (req, res): Promise<void> => {
   try {
     const { horizon, title, description, owner, status, dueDate } = req.body;
     if (!horizon || !title) { res.status(400).json({ error: "horizon and title required" }); return; }
-    const [goal] = await db.insert(companyGoalsTable).values({
-      horizon, title, description, owner: owner || "Tony",
+    const [goal] = await sharedDb.insert(companyGoalsTable).values({
+      horizon, title, description, owner: owner || (process.env.TCC_USER_NAME || "Tony").split(/\s+/)[0],
       status: status || "active", dueDate: dueDate || null,
     }).returning();
     push411ToSheet().catch(() => {});
@@ -87,11 +87,11 @@ router.patch("/business/goals/:id", async (req, res): Promise<void> => {
     if (position !== undefined) updates.position = position;
     if (horizon !== undefined) updates.horizon = horizon;
 
-    const [goal] = await db.update(companyGoalsTable).set(updates).where(eq(companyGoalsTable.id, id)).returning();
+    const [goal] = await sharedDb.update(companyGoalsTable).set(updates).where(eq(companyGoalsTable.id, id)).returning();
     if (!goal) { res.status(404).json({ error: "Goal not found" }); return; }
 
     if (status === "done") {
-      await db.insert(goalCompletionsTable).values({ goalId: id, goalTitle: goal.title, horizon: goal.horizon }).catch(() => {});
+      await sharedDb.insert(goalCompletionsTable).values({ goalId: id, goalTitle: goal.title, horizon: goal.horizon }).catch(() => {});
     }
 
     push411ToSheet().catch(() => {});
@@ -104,7 +104,7 @@ router.patch("/business/goals/:id", async (req, res): Promise<void> => {
 
 router.delete("/business/goals/:id", async (req, res): Promise<void> => {
   try {
-    await db.delete(companyGoalsTable).where(eq(companyGoalsTable.id, req.params.id));
+    await sharedDb.delete(companyGoalsTable).where(eq(companyGoalsTable.id, req.params.id));
     push411ToSheet().catch(() => {});
     res.json({ ok: true });
   } catch (err) {
@@ -117,7 +117,7 @@ router.post("/business/goals/reorder", async (req, res): Promise<void> => {
     const { orderedIds } = req.body as { orderedIds: string[] };
     if (!Array.isArray(orderedIds)) { res.status(400).json({ error: "orderedIds array required" }); return; }
     await Promise.all(orderedIds.map((id, pos) =>
-      db.update(companyGoalsTable).set({ position: pos, updatedAt: new Date() }).where(eq(companyGoalsTable.id, id))
+      sharedDb.update(companyGoalsTable).set({ position: pos, updatedAt: new Date() }).where(eq(companyGoalsTable.id, id))
     ));
     push411ToSheet().catch(() => {});
     res.json({ ok: true });
@@ -130,7 +130,7 @@ router.post("/business/goals/reorder", async (req, res): Promise<void> => {
 
 router.get("/business/team", async (_req, res): Promise<void> => {
   try {
-    const team = await db.select().from(teamRolesTable).orderBy(asc(teamRolesTable.position), asc(teamRolesTable.name));
+    const team = await sharedDb.select().from(teamRolesTable).orderBy(asc(teamRolesTable.position), asc(teamRolesTable.name));
     res.json(team);
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
@@ -141,7 +141,7 @@ router.post("/business/team", async (req, res): Promise<void> => {
   try {
     const { name, slackId, email, role, responsibilities, currentFocus, metrics } = req.body;
     if (!name || !role) { res.status(400).json({ error: "name and role required" }); return; }
-    const [member] = await db.insert(teamRolesTable).values({
+    const [member] = await sharedDb.insert(teamRolesTable).values({
       name, slackId, email, role,
       responsibilities: responsibilities || [],
       currentFocus, metrics: metrics || {},
@@ -159,7 +159,7 @@ router.patch("/business/team/:id", async (req, res): Promise<void> => {
     for (const f of fields) {
       if (req.body[f] !== undefined) updates[f === "slackId" ? "slackId" : f] = req.body[f];
     }
-    const [member] = await db.update(teamRolesTable).set(updates).where(eq(teamRolesTable.id, req.params.id)).returning();
+    const [member] = await sharedDb.update(teamRolesTable).set(updates).where(eq(teamRolesTable.id, req.params.id)).returning();
     if (!member) { res.status(404).json({ error: "Team member not found" }); return; }
     pushTeamToSheet().catch(() => {});
     res.json(member);
@@ -174,7 +174,10 @@ router.post("/business/team/seed", async (_req, res): Promise<void> => {
   try {
     const defaults = [
       {
-        name: "Tony Diaz", slackId: "U0991BAS0TC", email: "tony@flipiq.com", role: "CEO",
+        name: process.env.TCC_USER_NAME || "Tony Diaz",
+        slackId: process.env.TCC_USER_SLACK_ID || "U0991BAS0TC",
+        email: process.env.TCC_USER_EMAIL || "tony@flipiq.com",
+        role: process.env.TCC_USER_ROLE || "CEO",
         responsibilities: ["Sales strategy", "Acquisition associate oversight", "Key deal relationships", "Company vision"],
         currentFocus: "Closing 2 deals/month per AA, hitting $100K revenue", position: 0,
       },
@@ -195,7 +198,7 @@ router.post("/business/team/seed", async (_req, res): Promise<void> => {
       },
     ];
     for (const m of defaults) {
-      await db.insert(teamRolesTable).values(m).onConflictDoUpdate({
+      await sharedDb.insert(teamRolesTable).values(m).onConflictDoUpdate({
         target: teamRolesTable.name,
         set: { role: m.role, slackId: m.slackId, email: m.email, currentFocus: m.currentFocus, position: m.position, updatedAt: new Date() },
       });
@@ -210,7 +213,7 @@ router.post("/business/team/seed", async (_req, res): Promise<void> => {
 
 router.get("/business/context", async (_req, res): Promise<void> => {
   try {
-    const rows = await db.select().from(businessContextTable);
+    const rows = await sharedDb.select().from(businessContextTable);
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
@@ -221,7 +224,7 @@ router.get("/business/context", async (_req, res): Promise<void> => {
 
 router.get("/business/goal-completions", async (_req, res): Promise<void> => {
   try {
-    const rows = await db.select().from(goalCompletionsTable).orderBy(desc(goalCompletionsTable.completedAt)).limit(100);
+    const rows = await sharedDb.select().from(goalCompletionsTable).orderBy(desc(goalCompletionsTable.completedAt)).limit(100);
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
@@ -234,10 +237,10 @@ export async function push411ToSheet(): Promise<void> {
   if (!BUSINESS_MASTER_SHEET_ID) return;
   try {
     const sheets = await getSheetsClient();
-    const goals = await db.select().from(companyGoalsTable).orderBy(asc(companyGoalsTable.position));
+    const goals = await sharedDb.select().from(companyGoalsTable).orderBy(asc(companyGoalsTable.position));
     const header = ["Horizon", "Goal / ONE THING", "Owner", "Status", "Due Date", "Description"];
     const rows = goals.map(g => [
-      g.horizon, g.title, g.owner || "Tony", g.status || "active",
+      g.horizon, g.title, g.owner || (process.env.TCC_USER_NAME || "Tony").split(/\s+/)[0], g.status || "active",
       g.dueDate || "", g.description || "",
     ]);
     await sheets.spreadsheets.values.clear({ spreadsheetId: BUSINESS_MASTER_SHEET_ID, range: "411 Plan!A:Z" });
@@ -259,7 +262,7 @@ export async function pushTeamToSheet(): Promise<void> {
   if (!BUSINESS_MASTER_SHEET_ID) return;
   try {
     const sheets = await getSheetsClient();
-    const team = await db.select().from(teamRolesTable).orderBy(asc(teamRolesTable.position), asc(teamRolesTable.name));
+    const team = await sharedDb.select().from(teamRolesTable).orderBy(asc(teamRolesTable.position), asc(teamRolesTable.name));
     const header = ["Name", "Role / Title", "Email", "Current Focus / Priority", "Responsibilities"];
     const rows = team.map(m => [
       m.name, m.role, m.email || "", m.currentFocus || "",

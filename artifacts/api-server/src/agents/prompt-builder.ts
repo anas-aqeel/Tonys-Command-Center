@@ -7,7 +7,7 @@
 // Returns blocks in Anthropic system-array form, ready to pass as
 // `system: blocks` to messages.create().
 
-import { db, agentMemoryEntriesTable, agentSkillsTable } from "@workspace/db";
+import { personalDb, agentMemoryEntriesTable, agentSkillsTable } from "@workspace/db";
 import { and, eq, inArray } from "drizzle-orm";
 import { decryptKeyFromString, type Tier } from "@workspace/integrations-anthropic-ai";
 
@@ -45,7 +45,7 @@ export interface SkillRecord {
 }
 
 export async function loadSkill(agent: string, skillName: string): Promise<SkillRecord | null> {
-  const rows = await db.select().from(agentSkillsTable)
+  const rows = await personalDb.select().from(agentSkillsTable)
     .where(and(eq(agentSkillsTable.agent, agent), eq(agentSkillsTable.skillName, skillName)))
     .limit(1);
   if (rows.length === 0) return null;
@@ -83,7 +83,7 @@ export async function loadSkill(agent: string, skillName: string): Promise<Skill
 }
 
 async function loadGlobalLayer(): Promise<string> {
-  const rows = await db.select().from(agentMemoryEntriesTable)
+  const rows = await personalDb.select().from(agentMemoryEntriesTable)
     .where(eq(agentMemoryEntriesTable.agent, "_shared"));
   if (rows.length === 0) return "";
   return rows.map(r => `# ${r.kind.toUpperCase()} — ${r.sectionName}\n\n${r.content}`).join("\n\n---\n\n");
@@ -108,7 +108,7 @@ async function loadAgentLayer(agent: string): Promise<string> {
   //     "Notes" sections that don't shape runtime behavior. Keeping IDENTITY
   //     rows in the DB for the Settings dashboard, but not loading them into
   //     the per-call system prompt — saves ~390 tok/call across every agent.
-  const rows = await db.select().from(agentMemoryEntriesTable)
+  const rows = await personalDb.select().from(agentMemoryEntriesTable)
     .where(and(
       eq(agentMemoryEntriesTable.agent, agent),
       inArray(agentMemoryEntriesTable.kind, ["soul", "user"]),
@@ -119,7 +119,7 @@ async function loadAgentLayer(agent: string): Promise<string> {
 
 async function loadSkillLayer(agent: string, skillName: string, memorySections: string[]): Promise<string> {
   // Skill body
-  const skillBody = await db.select().from(agentMemoryEntriesTable)
+  const skillBody = await personalDb.select().from(agentMemoryEntriesTable)
     .where(and(
       eq(agentMemoryEntriesTable.agent, agent),
       eq(agentMemoryEntriesTable.kind, "skill"),
@@ -131,7 +131,7 @@ async function loadSkillLayer(agent: string, skillName: string, memorySections: 
 
   // Declared memory sections
   if (memorySections.length > 0) {
-    const memRows = await db.select().from(agentMemoryEntriesTable)
+    const memRows = await personalDb.select().from(agentMemoryEntriesTable)
       .where(and(
         eq(agentMemoryEntriesTable.agent, agent),
         eq(agentMemoryEntriesTable.kind, "memory"),

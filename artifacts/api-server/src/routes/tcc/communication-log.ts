@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db } from "@workspace/db";
+import { sharedDb } from "@workspace/db";
 import { communicationLogTable } from "../../lib/schema-v2";
 import { eq, desc, gte, sql } from "drizzle-orm";
 
@@ -9,7 +9,7 @@ router.get("/communication-log/recent", async (req, res): Promise<void> => {
   const hours = Number(req.query.hours) || 48;
   const since = new Date(Date.now() - hours * 60 * 60 * 1000);
 
-  const logs = await db.select()
+  const logs = await sharedDb.select()
     .from(communicationLogTable)
     .where(gte(communicationLogTable.loggedAt, since))
     .orderBy(desc(communicationLogTable.loggedAt))
@@ -21,7 +21,7 @@ router.get("/communication-log/recent", async (req, res): Promise<void> => {
 router.get("/communication-log/:contactId/stats", async (req, res): Promise<void> => {
   const { contactId } = req.params;
 
-  const stats = await db.select({
+  const stats = await sharedDb.select({
     channel: communicationLogTable.channel,
     count: sql<number>`COUNT(*)`,
     lastDate: sql<string>`MAX(logged_at)`,
@@ -53,14 +53,14 @@ router.get("/communication-log/:contactId", async (req, res): Promise<void> => {
   const limit = Math.min(Number(req.query.limit) || 20, 100);
   const offset = Number(req.query.offset) || 0;
 
-  const logs = await db.select()
+  const logs = await sharedDb.select()
     .from(communicationLogTable)
     .where(eq(communicationLogTable.contactId, contactId))
     .orderBy(desc(communicationLogTable.loggedAt))
     .limit(limit)
     .offset(offset);
 
-  const [countResult] = await db.select({ count: sql<number>`COUNT(*)` })
+  const [countResult] = await sharedDb.select({ count: sql<number>`COUNT(*)` })
     .from(communicationLogTable)
     .where(eq(communicationLogTable.contactId, contactId));
 

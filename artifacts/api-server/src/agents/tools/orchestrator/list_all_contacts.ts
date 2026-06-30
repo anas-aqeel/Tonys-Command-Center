@@ -5,12 +5,12 @@
 // chosen name.
 
 import type { ToolHandler } from "../index.js";
-import { db, contactsTable } from "@workspace/db";
+import { sharedDb, contactsTable } from "@workspace/db";
 import { asc } from "drizzle-orm";
 
 const handler: ToolHandler = async () => {
   try {
-    const rows = await db
+    const rows = await sharedDb
       .select({ id: contactsTable.id, name: contactsTable.name, company: contactsTable.company })
       .from(contactsTable)
       .orderBy(asc(contactsTable.name));

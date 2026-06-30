@@ -1,6 +1,6 @@
 // Brief feedback snapshot — for daily-brief / spiritual-anchor / EOD feedback.
 
-import { db, dailyBriefsTable, eodReportsTable } from "@workspace/db";
+import { personalDb, dailyBriefsTable, eodReportsTable } from "@workspace/db";
 import { eq, desc } from "drizzle-orm";
 
 export async function captureBriefSnapshot(
@@ -13,26 +13,26 @@ export async function captureBriefSnapshot(
 
   // Try daily brief by id or date
   if (sourceId && /^[0-9a-f-]{36}$/i.test(sourceId)) {
-    const [b] = await db.select().from(dailyBriefsTable)
+    const [b] = await personalDb.select().from(dailyBriefsTable)
       .where(eq(dailyBriefsTable.id, sourceId))
       .limit(1);
     brief = b || null;
 
     if (!brief) {
-      const [e] = await db.select().from(eodReportsTable)
+      const [e] = await personalDb.select().from(eodReportsTable)
         .where(eq(eodReportsTable.id, sourceId))
         .limit(1);
       eod = e || null;
     }
   } else if (sourceId && /^\d{4}-\d{2}-\d{2}$/.test(sourceId)) {
-    const [b] = await db.select().from(dailyBriefsTable)
+    const [b] = await personalDb.select().from(dailyBriefsTable)
       .where(eq(dailyBriefsTable.date, sourceId))
       .limit(1);
     brief = b || null;
   }
 
   // Recent briefs for context
-  const recentBriefs = await db.select({
+  const recentBriefs = await personalDb.select({
     date: dailyBriefsTable.date,
   }).from(dailyBriefsTable)
     .orderBy(desc(dailyBriefsTable.date))

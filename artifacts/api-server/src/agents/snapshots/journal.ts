@@ -3,7 +3,7 @@
 // agent_feedback (where Coach can read it), but per agents/journal/MEMORY/privacy-boundary,
 // Coach is forbidden from cross-pollinating journal content into other agents' memory.
 
-import { db, journalsTable } from "@workspace/db";
+import { personalDb, journalsTable } from "@workspace/db";
 import { eq, desc } from "drizzle-orm";
 
 export async function captureJournalSnapshot(
@@ -14,19 +14,19 @@ export async function captureJournalSnapshot(
   let entry: any = null;
 
   if (sourceId && /^[0-9a-f-]{36}$/i.test(sourceId)) {
-    const [e] = await db.select().from(journalsTable)
+    const [e] = await personalDb.select().from(journalsTable)
       .where(eq(journalsTable.id, sourceId))
       .limit(1);
     entry = e || null;
   } else if (sourceId && /^\d{4}-\d{2}-\d{2}$/.test(sourceId)) {
-    const [e] = await db.select().from(journalsTable)
+    const [e] = await personalDb.select().from(journalsTable)
       .where(eq(journalsTable.date, sourceId))
       .limit(1);
     entry = e || null;
   }
 
   // Recent journals for tone context (no full text — just metadata to preserve privacy boundary)
-  const recentJournals = await db.select({
+  const recentJournals = await personalDb.select({
     date: journalsTable.date,
     mood: journalsTable.mood,
   }).from(journalsTable)

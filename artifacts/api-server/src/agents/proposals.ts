@@ -2,7 +2,7 @@
 // Called from /api/agents/* routes (training-state, approve, reject) and
 // internally by coach.ts when it produces a proposal.
 
-import { db, agentMemoryProposalsTable, agentTrainingRunsTable, agentFeedbackTable, agentMemoryEntriesTable } from "@workspace/db";
+import { personalDb, agentMemoryProposalsTable, agentTrainingRunsTable, agentFeedbackTable, agentMemoryEntriesTable } from "@workspace/db";
 import { and, eq, sql, isNull } from "drizzle-orm";
 
 // Per FEEDBACK_SYSTEM.md §8: a proposal is an atomic bundle of N memory-section diffs.
@@ -22,7 +22,7 @@ export interface ProposalCreateInput {
 }
 
 export async function createProposal(input: ProposalCreateInput): Promise<string> {
-  const inserted = await db.insert(agentMemoryProposalsTable).values({
+  const inserted = await personalDb.insert(agentMemoryProposalsTable).values({
     agent: input.agent,
     trainingRunId: input.trainingRunId,
     reason: input.reason,
@@ -43,7 +43,7 @@ export interface TrainingState {
 
 export async function getTrainingState(agent: string): Promise<TrainingState> {
   // Find any running training run for this agent (partial index makes this fast).
-  const [running] = await db.select({
+  const [running] = await personalDb.select({
     id: agentTrainingRunsTable.id,
     startedAt: agentTrainingRunsTable.startedAt,
   })
@@ -52,12 +52,12 @@ export async function getTrainingState(agent: string): Promise<TrainingState> {
     .limit(1);
 
   // Count unconsumed feedback rows.
-  const [unconsumed] = await db.select({ count: sql<number>`COUNT(*)::int` })
+  const [unconsumed] = await personalDb.select({ count: sql<number>`COUNT(*)::int` })
     .from(agentFeedbackTable)
     .where(and(eq(agentFeedbackTable.agent, agent), isNull(agentFeedbackTable.consumedAt)));
 
   // Count pending proposals.
-  const [pending] = await db.select({ count: sql<number>`COUNT(*)::int` })
+  const [pending] = await personalDb.select({ count: sql<number>`COUNT(*)::int` })
     .from(agentMemoryProposalsTable)
     .where(and(eq(agentMemoryProposalsTable.agent, agent), eq(agentMemoryProposalsTable.status, "pending")));
 
@@ -79,7 +79,7 @@ export async function getTrainingState(agent: string): Promise<TrainingState> {
 // edited the section in between) so the proposal row functions as the audit
 // trail / rollback source.
 export async function applyApprovedProposal(proposalId: string, decidedBy: string): Promise<void> {
-  await db.transaction(async (tx) => {
+  await personalDb.transaction(async (tx) => {
     const [proposal] = await tx.select().from(agentMemoryProposalsTable)
       .where(eq(agentMemoryProposalsTable.id, proposalId))
       .limit(1);
@@ -137,7 +137,7 @@ export async function applyApprovedProposal(proposalId: string, decidedBy: strin
 }
 
 export async function rejectProposal(proposalId: string, decidedBy: string, reason?: string): Promise<void> {
-  await db.update(agentMemoryProposalsTable).set({
+  await personalDb.update(agentMemoryProposalsTable).set({
     status: "rejected",
     decidedAt: new Date(),
     decidedBy,
