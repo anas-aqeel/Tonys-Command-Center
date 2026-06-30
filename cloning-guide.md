@@ -246,13 +246,21 @@ Go to the API server project → **Settings → Environment Variables** and add:
 | **CRON_PLAN_INGEST_ENABLED** | `false` | Only Tony's instance runs plan ingest cron |
 | **CRON_EOD_ENABLED** | `true` | Each user runs their own EOD cron |
 
-#### Optional (per-user Google Docs/Sheets — create new ones or leave blank)
+#### Per-User Google Docs/Sheets (check-ins & journal)
+
+Check-ins and journals are always saved to the user's **personal database**. Optionally, they can also sync to Google Sheets/Docs. If the env var is blank or unset, the Google write is skipped (data is still saved to the DB).
 
 | Variable | Value | Notes |
 |----------|-------|-------|
-| **JOURNAL_DOC_ID** | `<new-google-doc-id>` | Create a new Google Doc for this user's journal, or omit to skip Doc writes |
-| **CHECKIN_SHEET_ID** | `<new-google-sheet-id>` | Create a new Google Sheet for check-in tracking, or omit |
-| **PLAN_90_DAY_ID** | `<google-doc-id>` | User's 90-day plan doc, or omit |
+| **CHECKIN_SHEET_ID** | `<google-sheet-id>` | Create a Google Sheet with a "Daily Check-in" tab, paste the Sheet ID. Leave blank to disable. |
+| **JOURNAL_DOC_ID** | `<google-doc-id>` | Create a Google Doc for journal entries, paste the Doc ID. Leave blank to disable. |
+| **PLAN_90_DAY_ID** | `<google-doc-id>` | User's 90-day plan doc. Leave blank to disable. |
+
+**How to get the ID:** Open the Google Sheet/Doc in your browser. The ID is the long string in the URL:
+- Sheet: `https://docs.google.com/spreadsheets/d/`**`THIS_IS_THE_ID`**`/edit`
+- Doc: `https://docs.google.com/document/d/`**`THIS_IS_THE_ID`**`/edit`
+
+**Important:** The Google Sheet/Doc must be accessible by the user's Google account (the one whose refresh token you generated in Step 2b). Either create it with that account or share it with edit access.
 
 ### Frontend Environment Variables
 
@@ -337,6 +345,28 @@ curl -H "X-TCC-Token: <pin>" \
 | Scratch Notes | Personal DB | Empty |
 | Chat | Personal DB | Works (agent memory seeded) |
 | AI Feedback | Personal DB | Isolated (doesn't affect Tony) |
+
+---
+
+## Where Data Lives
+
+Each user's data is isolated in their personal database. Shared business data lives in Tony's database and is read-only for other users.
+
+| Data | Database | Google Sync |
+|------|----------|-------------|
+| Check-ins | Personal DB (`checkinsTable`) | Google Sheet if `CHECKIN_SHEET_ID` is set |
+| Journals | Personal DB (`journalsTable`) | Google Doc if `JOURNAL_DOC_ID` is set |
+| Ideas | Personal DB | None |
+| Scratch Notes | Personal DB | None |
+| Chat / AI Threads | Personal DB | None |
+| Agent Training / Feedback | Personal DB | None |
+| AI Usage Logs | Personal DB | None |
+| Business Context | Shared DB (Tony's) | Synced from shared Google Sheet |
+| Contacts | Shared DB (Tony's) | None |
+| Communication Log | Shared DB (Tony's) | None |
+| Meeting History | Shared DB (Tony's) | None |
+
+**Key point:** If `CHECKIN_SHEET_ID` or `JOURNAL_DOC_ID` is not set, the Google Sheet/Doc write is silently skipped. The data is still saved to the personal database — the Google write is purely optional for backup/visibility.
 
 ---
 

@@ -55,7 +55,7 @@ If I'm not living this, I'm not leading. If I'm not leading myself, I cannot lea
 `;
 
 
-const CHECKIN_SHEET_ID = "1rMLE_RhdRDsC2dqRs8eIiF6bySCAkMvy1k4JlHKkRMw";
+const CHECKIN_SHEET_ID = process.env.CHECKIN_SHEET_ID || "";
 
 const router: IRouter = Router();
 
@@ -177,7 +177,7 @@ router.post("/checkin", async (req, res): Promise<void> => {
 
   // Upsert to personal check-in Google Sheet (find by date, update or append)
   const alertSummary = alerts.length > 0 ? alerts.map(a => a.message).join(" | ") : "";
-  upsertSheetRow(CHECKIN_SHEET_ID, "Daily Check-in", checkin.date, [
+  if (CHECKIN_SHEET_ID) upsertSheetRow(CHECKIN_SHEET_ID, "Daily Check-in", checkin.date, [
     checkin.date,
     checkin.bedtime ?? "",
     checkin.waketime ?? "",

@@ -8,7 +8,7 @@ import { appendToDoc } from "../../lib/google-docs.js";
 import { isAgentRuntimeEnabled } from "../../agents/flags.js";
 import { runAgent } from "../../agents/runtime.js";
 
-const JOURNAL_DOC_ID = "1kQjIFa903luN-62HkUD0tPGAmeQPC7JMN6rfnbvXYRE";
+const JOURNAL_DOC_ID = process.env.JOURNAL_DOC_ID || "";
 
 const router: IRouter = Router();
 
@@ -162,7 +162,7 @@ Output EXACTLY this format and nothing else (start immediately with ### Daily Jo
 
   // Append to Google Doc: always on first entry, retry if previous write failed
   const existingUrl = isEdit ? (await personalDb.select({ docsPageUrl: journalsTable.docsPageUrl }).from(journalsTable).where(eq(journalsTable.date, today)).limit(1))[0]?.docsPageUrl : null;
-  const shouldWriteDoc = rawText !== "[skipped]" && formattedText && (!isEdit || !existingUrl);
+  const shouldWriteDoc = JOURNAL_DOC_ID && rawText !== "[skipped]" && formattedText && (!isEdit || !existingUrl);
   if (shouldWriteDoc) {
     // If AI formatting failed (no mood/keyEvents), wrap raw text in the standard format
     let docText = formattedText;
