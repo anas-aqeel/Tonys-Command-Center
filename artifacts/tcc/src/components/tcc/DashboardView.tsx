@@ -1111,45 +1111,6 @@ export function DashboardView({ tasks, tDone, calendarData, emailsImportant, lin
 
         <div style={{ padding: "12px 20px 18px" }}>
 
-            {/* ── SALES CALLS — 10 Today ── */}
-            <SL text={`📞 Sales Calls — ${calls.length} of 10 Done`} color="#C62828" view="sales" onNavigate={onNavigate} />
-            <table style={{ width: "100%", borderCollapse: "collapse", border: BORDER, marginBottom: 2 }}>
-              <thead>
-                <tr><TH w={22} center>✓</TH><TH w={28} center>#</TH><TH>CONTACT</TH><TH w={120}>COMPANY</TH><TH w={90}>STATUS</TH><TH>NEXT STEP</TH></tr>
-              </thead>
-              <tbody>
-                {callList.slice(0, 10).map((c, i) => {
-                  const id = `call-${i}`;
-                  const done = ck(id) || calledNames.has(c.name.toLowerCase());
-                  return (
-                    <tr key={id} className="dash-row-hover" style={{ background: done ? "#FAFAF8" : "#fff" }}>
-                      <TD center><CB id={id} checked={done} onToggle={() => toggle(id)} /></TD>
-                      <TD center dim>{i + 1}</TD>
-                      <TD bold strike={done}>
-                        <span
-                          onClick={() => c.id && setSelectedContactId(String(c.id))}
-                          style={{ cursor: c.id ? "pointer" : "default", textDecoration: c.id ? "underline dotted" : "none", textUnderlineOffset: 3 }}
-                          title={c.id ? "Click to view contact" : undefined}
-                        >
-                          {c.name}
-                        </span>
-                      </TD>
-                      <TD small>{c.company || "—"}</TD>
-                      <TD small><span style={{ color: done ? "#ccc" : (c.status === "Hot" ? "#C62828" : c.status === "Warm" ? "#B7791F" : c.status === "New" ? "#1565C0" : "#888") }}>{c.status || "—"}</span></TD>
-                      <TD small dim strike={done}>{c.nextStep || "—"}</TD>
-                    </tr>
-                  );
-                })}
-                {callList.length < 10 && Array.from({ length: 10 - callList.length }).map((_, i) => (
-                  <tr key={`cb-${i}`} style={{ background: "#fff" }}>
-                    <TD center><CB id={`cb-blank-${i}`} checked={false} onToggle={() => {}} /></TD>
-                    <TD center dim>{callList.length + i + 1}</TD>
-                    <TD /><TD /><TD /><TD />
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-
             {/* ── TOP 3 — from 411 Plan P0 tasks ── */}
             <SL text="★ Top 3 — Do These First" color="#B7791F" view="tasks" onNavigate={onNavigate} />
             <div style={{ marginBottom: 6 }}>
