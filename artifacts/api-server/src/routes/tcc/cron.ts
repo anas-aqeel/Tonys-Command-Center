@@ -50,6 +50,18 @@ router.post("/cron/eod", verifyCron, async (_req, res) => {
 // status is the response; email reclassify runs after with its own try/catch
 // so an email failure can't mask a successful plan ingest.
 router.post("/cron/plan-ingest", verifyCron, async (_req, res) => {
+  // Multi-user guard: plan-ingest writes to shared business_context. Only the
+  // primary instance (Tony's) should run it. On Ethan/Ramy/etc. the env var is
+  // set to "false" so the handler no-ops instead of racing on the same rows and
+  // wasting Google/Anthropic quota.
+  if (process.env.CRON_PLAN_INGEST_ENABLED !== "true") {
+    res.json({
+      ok: true,
+      skipped: true,
+      reason: "CRON_PLAN_INGEST_ENABLED is not 'true' on this instance",
+    });
+    return;
+  }
   try {
     const { syncContextIngest } = await import("./sheets-sync");
     await syncContextIngest();

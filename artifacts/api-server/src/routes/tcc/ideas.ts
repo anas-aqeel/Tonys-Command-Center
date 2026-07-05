@@ -136,7 +136,7 @@ async function classifyIdea(text: string, recentIdeas: typeof ideasTable.$inferS
 
   const liveContext = await getBusinessContext().catch(() => "");
 
-  const userPrompt = `You are Tony Diaz's AI classifier for FlipIQ ideas. Analyze this idea and return ONLY valid JSON.
+  const userPrompt = `You are ${process.env.TCC_USER_NAME || "Tony Diaz"}'s AI classifier for FlipIQ ideas. Analyze this idea and return ONLY valid JSON.
 
 BUSINESS CONTEXT:
 ${liveContext ? `LIVE BUSINESS DOCUMENTS (primary source):\n${liveContext}` : BUSINESS_PLAN}
@@ -611,13 +611,13 @@ router.post("/ideas/notify-assignee", async (req, res): Promise<void> => {
         const body = [
           `Hi ${assigneeName},`,
           "",
-          `Tony Diaz has assigned you an action item from FlipIQ's idea pipeline.`,
+          `${process.env.TCC_USER_NAME || "Tony Diaz"} has assigned you an action item from FlipIQ's idea pipeline.`,
           "",
           `Idea: ${ideaText}`,
           `Category: ${category}`,
           `Urgency: ${urgency}`,
           `Due Date: ${dueDate}`,
-          ...(note ? [``, `Note from Tony: ${note}`] : []),
+          ...(note ? [``, `Note from ${(process.env.TCC_USER_NAME || "Tony Diaz").split(/\s+/)[0]}: ${note}`] : []),
           "",
           "Please action this by the due date.",
           "",
